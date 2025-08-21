@@ -73,7 +73,7 @@ Threshold (s)	Time difference threshold to determine if two frames are close eno
 Interval (s)	Expected time interval between frames. Should be equal to 'Sec per frame' set above.
 
 
-6. Device Status
+# 6. Device Status
 The “Pi state” section on the lower right shows connection status of each Raspberry Pi (e.g., pi1, pi2, etc.).
 
 
