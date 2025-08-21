@@ -174,7 +174,17 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
 
                     # Motion detection
                     white_A = cv2.countNonZero(binaryImage)
-                    motion_detected = white_A > int(gray.size * motion_threshold)
+
+                    dilated_A = cv2.dilate(binaryImage, None, iterations=2)
+                    cnts_A, _ = cv2.findContours(dilated_A.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        
+                    for c in cnts_A:
+                        if cv2.contourArea(c) > 100:
+                            contour = True
+                            break
+                            
+                    # motion_detected = white_A > int(gray.size * motion_threshold)
+                    motion_detected = (white_A > 20) and contour
 
                 if cam1_enabled and len(frame_storage_B) >= frame_interval:
                     previous_frame_B = frame_storage_B[0]
@@ -188,7 +198,14 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
 
                     # Motion detection
                     white_B = cv2.countNonZero(binaryImage_B)
-                    motion_detected_B = white_B > int(gray_B.size * motion_threshold)
+
+                    dilated_B = cv2.dilate(binaryImage_B, None, iterations=2)
+                    cnts_B, _ = cv2.findContours(dilated_B.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for c_B in cnts_B:
+                        if cv2.contourArea(c_B) > 500:
+                            contour_B = True
+                    # motion_detected_B = white_B > int(gray_B.size * motion_threshold)
+                    motion_detected_B = (white_B > 20) and contour_B
 
                 
                 '''mark where is moving when enable_contour is true'''
