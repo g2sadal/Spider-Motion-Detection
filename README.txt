@@ -79,3 +79,4 @@ This helps you quickly verify if all devices are connected and responsive.
 
 
 If you encounter issues or need help, please contact the developer: pshao7@jh.edu
+
