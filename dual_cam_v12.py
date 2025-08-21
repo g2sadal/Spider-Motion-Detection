@@ -204,6 +204,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                     for c_B in cnts_B:
                         if cv2.contourArea(c_B) > 500:
                             contour_B = True
+                            break
+                            
                     # motion_detected_B = white_B > int(gray_B.size * motion_threshold)
                     motion_detected_B = (white_B > 20) and contour_B
 
