@@ -6,6 +6,7 @@ import numpy as np
 import os
 from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
+from libcamera import controls
 from datetime import datetime
 from collections import deque
 import json
