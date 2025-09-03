@@ -95,7 +95,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
         picam2_A = Picamera2(0)
         video_config_A = picam2_A.create_still_configuration(main={"size": img_Size, "format": "RGB888"})
         picam2_A.configure(video_config_A)
-        picam2_A.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.0})
+        picam2_A.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 2.0})
         picam2_A.start()
         print("cam0 started", flush=True)
         cam0_enabled = True
@@ -107,7 +107,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
         picam2_B = Picamera2(1)
         video_config_B = picam2_B.create_still_configuration(main={"size": img_Size, "format": "RGB888"})
         picam2_B.configure(video_config_B)
-        picam2_B.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.0})
+        picam2_B.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 2.0})
         picam2_B.start()
         print("cam1 started", flush=True)
         cam1_enabled = True
