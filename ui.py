@@ -16,8 +16,10 @@ DEFAULTS = {
     "frame_interval":    "10",
     "timeFPS":           "1.2",
     "delay":             "2",
-    "motion_threshold":  "0.005"
+    "motion_threshold":  "0.005",
+    "focus_distance":    "0.5" #default 0.5m for the setup environment
 }
+
 RES_CHOICES = [
     "4608x2592",
     "2304x1296",
@@ -46,6 +48,7 @@ def build_remote_cmd():
     tpf   = fps_entry.get().strip()
     dly   = delay_entry.get().strip()
     thr   = thres_entry.get().strip()
+    focus = focus_entry.get().strip()
 
     cmd = ["python3", "-u", "/home/terradynamics/Desktop/motion/dual_cam_v11.py",
            "--resolution", res]
@@ -54,6 +57,7 @@ def build_remote_cmd():
     if tpf: cmd += ["--timeFPS", tpf]
     if dly: cmd += ["--delay", dly]
     if thr: cmd += ["--motion_threshold", thr]
+    if focus: cmd += ["--focus_distance", focus]
 
     return " ".join(cmd)
 
@@ -83,7 +87,9 @@ def run_remote_program():
                 parts = line.strip().split()
                 if len(parts) == 2:
                     name, ip = parts
-                    procs.append(launch_for_host(name, ip))
+                    proc = launch_for_host(name, ip)
+                    if proc:
+                        procs.append(proc)
     except FileNotFoundError:
         messagebox.showerror("Error", "IP.txt not found")
         return
@@ -105,27 +111,32 @@ def stop_program():
     global running
     running = False
     print_to_box("Program terminating...")
-    for p in procs:
-        try:
-            p.terminate()
-            for cam_name, _ in hosts:
-                set_pi_light(cam_name, "red")
 
-        except Exception:
-            pass
-    print_to_box("All processes terminated.")
-
+    # first define hosts before using it
     try:
         with open("IP.txt") as f:
             hosts = [line.strip().split() for line in f if len(line.strip().split()) == 2]
     except FileNotFoundError:
         messagebox.showerror("Error", "IP.txt not found")
         return
+    
+    # Terminate processes
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
 
+    # Update lights for all cameras
+    for cam_name, _ in hosts:
+        set_pi_light(cam_name, "red")
+
+    print_to_box("All processes terminated.")
+
+    #Pull data from Pis
     remote_base = "/home/terradynamics/Desktop/motion"
     default_path = os.path.expanduser("~/Desktop/Terradynamics")
     local_base = local_base_dir if local_base_dir else default_path
-
 
     for cam_name, ip in hosts:
         remote_folder = f"{remote_base}/{session_folder}"
@@ -239,7 +250,7 @@ tk.Label(root, text="Use for Terradynamics Lab only").pack()
 tk.Label(root, text="Copyright: Pucheng Shao").pack()
 
 setting = tk.LabelFrame(root, text="Settings", padx=10, pady=6)
-setting.place(x=40, y=50, width=940, height=150)
+setting.place(x=40, y=50, width=940, height=175) #increased height to fit focus setting
 
 tk.Label(setting, text="Resolution:").grid(row=0, column=0, sticky="e")
 res_var = tk.StringVar(value=DEFAULTS["resolution"])
@@ -256,43 +267,53 @@ fi_entry    = add_entry("Num of stored frames:",    1, "frame_interval")
 fps_entry   = add_entry("Sec per frame:",     2, "timeFPS")
 delay_entry = add_entry("Stop delay (s):",    3, "delay")
 thres_entry = add_entry("Motion threshold:",  4, "motion_threshold")
+
+#Add Focus Distance entry (row 5)
+tk.Label(setting, text="Focus distance (m):").grid(row=5, column=0, sticky="e")
+focus_entry = tk.Entry(setting, width=10)
+focus_entry.insert(0, DEFAULTS["focus_distance"])
+focus_entry.grid(row=5, column=1, sticky="w")
+
 tk.Label(root, text="Image size").place(x=300, y=80)
 tk.Label(root, text="The number of frames stored in the queue(used for writing frames into vedio before the motion detected)").place(x=280, y=105)
 tk.Label(root, text="Time interval between 2 adjacent frames").place(x=280, y=130)
 tk.Label(root, text="Time delay after no motion detected").place(x=280, y=155)
 tk.Label(root, text="Threshold for motion detection").place(x=280, y=175)
+#Add help text for focus distance
+tk.Label(root, text="The focus distance(in meters): 0.1=macro, 0.5=default, 2.0=medium, 10=far (higher value = farther focus)").place(x=280, y=198)
+
 start_btn = tk.Button(root, text="START", width=20, height=2,
                       bg="green", fg="white", command=start_program)
-start_btn.place(x=120, y=220)
+start_btn.place(x=120, y=245)   #adjusted y position to fit new entry
 
 select_dir_btn = tk.Button(root, text="Select Save Location", command=choose_local_directory)
-select_dir_btn.place(x=120, y=270)
+select_dir_btn.place(x=120, y=295)  #adjusted y position to fit new entry
 
 local_dir_label = tk.Label(root, text="Selected: (Default = ~/Desktop/Terradynamics)", anchor="w")
-local_dir_label.place(x=20, y=300)
+local_dir_label.place(x=20, y=325)  #adjusted y position to fit new entry
 
 stop_btn = tk.Button(root, text="STOP", width=20, height=2,
                      bg="red", fg="white", command=stop_program)
-stop_btn.place(x=360, y=220)
+stop_btn.place(x=360, y=245)    #adjusted y position to fit new entry
 
 pair_btn = tk.Button(root, text="PAIR", width=20, height=2,
                      bg="blue", fg="white", command=choose_folder)
-pair_btn.place(x=600, y=220)
+pair_btn.place(x=600, y=245)    #adjusted y position to fit new entry
 
-tk.Label(root, text="Threshold (s):").place(x=300, y=280)
+tk.Label(root, text="Threshold (s):").place(x=300, y=305)   #adjusted y position
 threshold_entry = tk.Entry(root, width=8)
 threshold_entry.insert(0, "0.2")
-threshold_entry.place(x=400, y=280)
-tk.Label(root, text="The threshold used to determine whether two frames can be paired").place(x=470, y=280)
+threshold_entry.place(x=400, y=305) #adjusted y position
+tk.Label(root, text="The threshold used to determine whether two frames can be paired").place(x=470, y=305) #adjusted y position
 
-tk.Label(root, text="Interval (s):").place(x=315, y=310)
+tk.Label(root, text="Interval (s):").place(x=315, y=335)    #adjusted y position
 interval_entry = tk.Entry(root, width=8)
 interval_entry.insert(0, "1.2")
-interval_entry.place(x=400, y=310)
-tk.Label(root, text="Normally, this interval should be as same as the 'Sec per frame' in settings").place(x=470, y=310)
+interval_entry.place(x=400, y=335)  #adjusted y position
+tk.Label(root, text="Normally, this interval should be as same as the 'Sec per frame' in settings").place(x=470, y=335) #adjusted y position
 
-output_box = tk.Text(root, width=90, height=22)
-output_box.place(x=40, y=350)
+output_box = tk.Text(root, width=90, height=21)
+output_box.place(x=40, y=375)   #adjusted y position
 
 
 """light"""
@@ -300,7 +321,7 @@ output_box.place(x=40, y=350)
 pi_status = {}  # {pi_name: {"canvas": ..., "circle": ...}}
 
 status_frame = tk.LabelFrame(root, text="Pi state", padx=10, pady=10)
-status_frame.place(x=720, y=350, width=260, height=200)
+status_frame.place(x=720, y=375, width=260, height=200) #adjusted y position
 
 def create_status_lights(pi_names):
     for i, pi in enumerate(pi_names):
@@ -325,6 +346,5 @@ def init_pi_lights():
         pass
 
 init_pi_lights()
-
 
 root.mainloop()
