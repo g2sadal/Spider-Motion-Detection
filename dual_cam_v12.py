@@ -11,13 +11,51 @@ from datetime import datetime
 from collections import deque
 import json
 
-def main(enable_preview=False, enable_contour=False, frame_interval=10, resolution="4608x2592", timeFPS=1.2, delay=2, motion_threshold=0.005):
+def calculate_lens_position(focus_distance_meters):
+    """
+    Convert a focus distance in meters to a lens position value.
+    According to Picamera2 manual section 5.2.3:
+    - LensPosition ranges from 0.0 (infinity) to ~10.0 (very close/macro)
+    - The relationship is approximately: LensPosition = 1/distance_in_meters
+    
+    Args:
+        focus_distance_meters: Distance in meters (0.1 to 10)
+            - 0.1m = very close focus (macro)
+            - 0.5m = close focus (for 70cm box)
+            - 2.0m = medium distance
+            - 10m = far/infinity focus
+
+    Returns:
+        lens_position: Value for LensPosition control (0.0 to 10.0)
+    """
+    # Clamp input to valid range
+    focus_distance_meters = max(0.1, min(10.0, focus_distance_meters))
+
+    if focus_distance_meters >= 10:
+        # Far focus / infinity
+        return 0.0
+    else:
+        # Use 1/distance relationship as per Picamera2 documentation
+        # This gives: 0.1m->10, 0.5m->2, 1m->1, 2m->0.5, 10m->0.1
+        lens_position = 1.0 / focus_distance_meters
+        # Clamp to valid range
+        return min(10.0, max(0.0, lens_position))
+  
+def main(enable_preview=False, enable_contour=False, frame_interval=10, resolution="4608x2592", timeFPS=1.2, delay=2, motion_threshold=0.005, focus_distance=2.0):
     try:
         w, h = map(int, resolution.lower().split('x'))
         img_Size = (w, h)
     except ValueError:
         raise ValueError("--resolution has to be “width x height”, such as 2304x1296")
     
+    # Validate and calculate lens position from focus distance
+    if focus_distance < 0.1 or focus_distance > 10:
+        print(f"Warning: focus_distance {focus_distance}m outside range (0.1-10m), clamping", flush=True)
+        focus_distance = max(0.1, min(10.0, focus_distance))
+    
+    lens_position = calculate_lens_position(focus_distance)
+    print(f"Focus Distance: {focus_distance}m -> Lens Position: {lens_position:.2f}", flush=True)
+
     '''Create Json file to save the timestamp of each frame of vedio A and B'''
     timestamp_data_A = None
     timestamp_data_B = None
@@ -31,23 +69,19 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
     '''Create a txt file to save the starting time and ending time of each vedio'''
     log_file = "motion_timestamps.txt"
     log_file_path = os.path.join(folder_path, log_file)
-    # if os.path.exists(log_file_path):
-    #     open(log_file, "w").close()
     
     if os.path.exists(log_file_path):
         open(log_file_path, "w").close()
 
     log_file_B = 'motion_timestamps_B.txt'
     log_file_path_B = os.path.join(folder_path, log_file_B)
-    # if os.path.exists(log_file_path):
-    #     open(log_file_B, 'w').close()
-    if os.path.exists(log_file_path):
+
+    if os.path.exists(log_file_path_B):
         open(log_file_path_B, 'w').close()
         
     '''frame index initialization(for frame allignment)'''
     frame_index_A = 0
     frame_index_B = 0
-    
 
     '''Create a queue to save ten frames before recording'''
     frame_storage_A = deque(maxlen = frame_interval)
@@ -56,7 +90,6 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
     frame_storage_color_B = deque(maxlen = frame_interval)
     timestamp_storage_A = deque(maxlen = frame_interval)
     timestamp_storage_B = deque(maxlen = frame_interval)
-
 
     '''Initilization'''
     previous_frame = None
@@ -95,27 +128,29 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
         picam2_A = Picamera2(0)
         video_config_A = picam2_A.create_still_configuration(main={"size": img_Size, "format": "RGB888"})
         picam2_A.configure(video_config_A)
-        picam2_A.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 2.0})
+
+        #Apply calculated focus position
+        picam2_A.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": lens_position})
         picam2_A.start()
-        print("cam0 started", flush=True)
+        print(f"cam0 started with focus at {focus_distance}m (lens position: {lens_position:.2f})", flush=True)
         cam0_enabled = True
     except Exception as e:
-        print("cam0 failed", flush=True)
+        print(f"cam0 failed: {e}", flush=True)
         picam2_A = None
 
     try:
         picam2_B = Picamera2(1)
         video_config_B = picam2_B.create_still_configuration(main={"size": img_Size, "format": "RGB888"})
         picam2_B.configure(video_config_B)
-        picam2_B.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 2.0})
+
+        #Apply same focus position to camera B
+        picam2_B.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": lens_position})
         picam2_B.start()
-        print("cam1 started", flush=True)
+        print(f"cam1 started with focus at {focus_distance}m (lens position: {lens_position:.2f})", flush=True)
         cam1_enabled = True
     except Exception as e:
-        print("cam1 failed", flush=True)
+        print(f"cam1 failed: {e}", flush=True)
         picam2_B = None
-
-    
 
     try:
         while True:
@@ -123,6 +158,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
             # set motion detected as False at first
             motion_detected = False
             motion_detected_B = False
+            contour = False
+            contour_B = False
 
             # Capture current frame
             if cam0_enabled:
@@ -159,7 +196,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 frame_storage_B.append(gausBlur_B)
                 frame_storage_color_B.append(frame_B)
                 timestamp_storage_B.append(sensor_timestamp_B)
-            
+
             
             if (cam0_enabled and len(frame_storage_A) >= frame_interval) or (cam1_enabled and len(frame_storage_B) >= frame_interval):
 
@@ -184,8 +221,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             contour = True
                             break
                             
-                    # motion_detected = white_A > int(gray.size * motion_threshold)
-                    motion_detected = (white_A > 20) and contour
+                    #motion_detected = (white_A > 20) and contour
+                    motion_detected = (white_A / (img_Size[0] * img_Size[1]) > motion_threshold) and contour
 
                 if cam1_enabled and len(frame_storage_B) >= frame_interval:
                     previous_frame_B = frame_storage_B[0]
@@ -208,9 +245,9 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             break
                             
                     # motion_detected_B = white_B > int(gray_B.size * motion_threshold)
-                    motion_detected_B = (white_B > 20) and contour_B
+                    #motion_detected_B = (white_B > 20) and contour_B
+                    motion_detected_B = (white_B / (img_Size[0] * img_Size[1]) > motion_threshold) and contour_B
 
-                
                 '''mark where is moving when enable_contour is true'''
                 if cam0_enabled:
                     if motion_detected and enable_contour:
@@ -225,7 +262,6 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                                     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                     print("Motion detected(A):", motion_detected, flush=True)
 
-                        
                 '''same function for camera B'''
                 if cam1_enabled:
                     if motion_detected_B and enable_contour:    
@@ -261,11 +297,13 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         # create a json file to save frame
                         timestamp_data_A = {
                             "video_filename": filename_A,
-                            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),  
+                            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                            "focus_distance": focus_distance,
+                            "lens_position": lens_position, 
                             "frames": []
                         }
                         
-                        # write previous 10 frames into vedio when motion detected
+                        # write previous frames into vedio when motion detected
                         for each in frame_storage_color_A:
                             writer_A.write(each)
                             
@@ -292,13 +330,13 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         is_timing = False
                         start_time = None
 
-                    # give 2 seconds buffer to stopr recording
+                    # give delay buffer to stop recording
                     elif (not motion_detected) and recording and (not is_timing):
                         start_time = time.time()
                         is_timing = True
-                        print("No move detected (Camera A), will stop recording if no move detected in 2 seconds", flush=True)
+                        print(f"No move detected (Camera A), will stop recording if no move detected in {delay} seconds", flush=True)
 
-                    # if no motion detected in 2 seconds, stop recording
+                    # if no motion detected after delay, stop recording
                     elif is_timing and recording:
                         elapsed_time = time.time() - start_time
                         if elapsed_time > delay and recording:
@@ -331,6 +369,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             "timestamp": str(sensor_timestamp_B)
                         })
                         frame_index_B += 1
+
                     '''Same logic for camera B as A, have a look at A as reference'''
                     if motion_detected_B and (not recording_B):
                         frame_index_B = 0
@@ -343,7 +382,9 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
 
                         timestamp_data_B = {
                             "video_filename": filename_B,
-                            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),  
+                            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), 
+                            "focus_distance": focus_distance,
+                            "lens_position": lens_position,
                             "frames": []
                         }
                         
@@ -357,7 +398,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             
                         start_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path_B, "a") as f:
-                            f.write(f"Video {num_vedio_B} (File: {folder_path}/camera_B_{num_vedio_B}.h264): Start at {start_timestamp_B}\n")
+                            f.write(f"Video {num_vedio_B} (File: {folder_path}/camera_B_{num_vedio_B}.mp4): Start at {start_timestamp_B}\n")
                         # with open(timestamp_file_path_B, "a") as f:
                         #     for each_timestamp_B in timestamp_storage_B:
                         #         f.write(f"{frame_index_B}, {each_timestamp_B}\n")
@@ -379,13 +420,13 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                     elif (not motion_detected_B) and recording_B and (not is_timing_B):
                         start_time_B = time.time()
                         is_timing_B = True
-                        print("No move detected (Camera B), will stop recording if no move detected in 2 seconds", flush=True)
+                        print(f"No move detected (Camera B), will stop recording if no move detected in {delay} seconds", flush=True)
                     elif is_timing_B and recording_B:
                         elapsed_time_B = time.time() - start_time_B
                         if elapsed_time_B > delay and recording_B:
                             stop_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                             with open(log_file_path_B, "a") as f:
-                                f.write(f"Video {num_vedio_B} (File: {folder_path}/camera_B_{num_vedio_B}.h264): Stop at {stop_timestamp_B}\n")
+                                f.write(f"Video {num_vedio_B} (File: {folder_path}/camera_B_{num_vedio_B}.mp4): Stop at {stop_timestamp_B}\n")
                             
                             if timestamp_data_B is not None:
                                 timestamp_data_B["stop_time"] = stop_timestamp_B
@@ -406,8 +447,6 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
 
 
 
-            
-                
             # preview function
             if enable_preview:
                 preview_list = []
@@ -453,7 +492,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Dual camera motion detection with optional preview and contour"
+        description="Dual camera motion detection with adjustable focus control"
     )
     parser.add_argument(
         "--enable_preview",
@@ -475,13 +514,17 @@ if __name__ == "__main__":
     # Seconds per frame
     parser.add_argument("--timeFPS", type=float, default=1.2,
                         help="Seconds per frame (inverse of FPS)")
-
+    # Delay after no motion
     parser.add_argument("--delay", type=float, default=2.0,
                     help="Time delay after there is no motion detected")
+    # Motion threshold
     parser.add_argument("--motion_threshold", type=float, default=0.005,
                 help="threshold to detect whether there is motion detection")
+    # Focus distance parameter
+    parser.add_argument("--focus_distance", type=float, default=2.0,
+                        help="Focus distance in meters (0.1-10, where 0.1=close macro, 0.5=70cm box, 2=medium, 10=far)")
     args = parser.parse_args()
 
     main(enable_preview=args.enable_preview, enable_contour=args.enable_contour, resolution=args.resolution, timeFPS=args.timeFPS, frame_interval=args.frame_interval, 
-         delay=args.delay, motion_threshold=args.motion_threshold)
+         delay=args.delay, motion_threshold=args.motion_threshold, focus_distance=args.focus_distance)
 
