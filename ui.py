@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 import pandas as pd
 from tkinter import filedialog, messagebox
 import time
+import shutil
+import glob
 
 local_base_dir = None  
 session_folder = ""
-
-
+consolidated_json_folder = None  # Store path to consolidated JSON folder
 
 DEFAULTS = {
     "resolution":        "4608x2592",
@@ -103,12 +104,67 @@ def run_remote_program():
             continue
 
 def start_program():
-    global session_folder
+    global session_folder, consolidated_json_folder
     session_folder = datetime.now().strftime("%Y-%m-%d_%H-%M_test")
+    consolidated_json_folder = None  # Reset consolidated JSON folder on new session
     threading.Thread(target=run_remote_program, daemon=True).start()
 
+def collect_timestamp_files(local_folders, base_path):
+    """
+    Collect all timestamp.json files from downloaded folders into a single directory.
+    Return the path to the consolidated folder.
+    """
+    #Create a consolidated folder for JSON files
+    consolidated_folder = os.path.join(base_path, f"consolidated_{session_folder}")
+    os.makedirs(consolidated_folder, exist_ok=True)
+
+    print_to_box(f"\nCollecting timestamp.json files tp: {consolidated_folder}")
+
+    json_count = 0
+    found_files = set() #Track found files to avoid duplicates
+
+    for folder in local_folders:
+        #Search for timestamp.json files in the downloaded folder
+        #The SCP command copies the remote session folder into the local folder
+        #So the structure is: local_folder/session_folder/timestamp.json
+        json_patterns = [
+            os.path.join(folder, session_folder, "*_timestamp*.json"),  #Most likely location
+            os.path.join(folder, "*", "*_timestamp*.json"),
+            os.path.join(folder, "**", "*_timestamp*.json"),
+        ]
+
+        for pattern in json_patterns:
+            json_files = glob.glob(pattern, recursive=True)
+            for json_file in json_files:
+                if os.path.isfile(json_file) and json_file not in found_files:
+                    found_files.add(json_file)
+
+                    #Extract camera name from folder name
+                    folder_name = os.path.basename(folder)
+                    cam_name = folder_name.replace(f"_{session_folder}", "")    #Remove session suffix to get camera name
+
+                    #Create unique filename to avoid overwriting
+                    base_name = os.path.basename(json_file)
+                    if not base_name.startswith(cam_name):
+                        new_name = f"{cam_name}_{base_name}"
+                    else:
+                        new_name = base_name
+
+                    dest_file = os.path.join(consolidated_folder, new_name)
+
+                    try:
+                        shutil.copy2(json_file, dest_file)
+                        print_to_box(f" Copied: {new_name}")
+                        json_count += 1
+                        break  #Stop after first found file in this folder
+                    except Exception as e:
+                        print_to_box(f" Failed to copy {json_file}: {e}")
+
+    print_to_box(f"Collected {json_count} timestamp.json files")
+    return consolidated_folder if json_count > 0 else None
+
 def stop_program():
-    global running
+    global running, consolidated_json_folder
     running = False
     print_to_box("Program terminating...")
 
@@ -138,6 +194,9 @@ def stop_program():
     default_path = os.path.expanduser("~/Desktop/Terradynamics")
     local_base = local_base_dir if local_base_dir else default_path
 
+    #Track downloaded folders
+    downloaded_folders = []
+
     for cam_name, ip in hosts:
         remote_folder = f"{remote_base}/{session_folder}"
         local_folder = os.path.join(local_base, f"{cam_name}_{session_folder}")
@@ -152,8 +211,25 @@ def stop_program():
         result = subprocess.call(scp_cmd)
         if result == 0:
             print_to_box(f"[{cam_name}] copied successfully to {local_folder}")
+            downloaded_folders.append(local_folder)
         else:
             print_to_box(f"[{cam_name}] copy failed")
+
+    #Automatically collect all timestamp.json files
+    if downloaded_folders:
+        consolidated_json_folder = collect_timestamp_files(downloaded_folders, local_base)
+        if consolidated_json_folder:
+            print_to_box(f"\n[OK] Timestamp files ready for pairing in: {consolidated_json_folder}")
+            print_to_box("You can now click the PAIR button to align frames (or select a different folder)")
+
+            #Update the pair button to show it's ready
+            pair_btn.config(bg="green")
+        else:
+            print_to_box("\n[WARNING] No timestamp.json files found in downloaded data")
+            consolidated_json_folder = None
+    else:
+        print_to_box("\n[WARNING] No data was successfully downloaded")
+        consolidated_json_folder = None
 
 def sort_idx(timestamp, ref, left=0, right=None):
     if right is None: right = len(ref)
@@ -183,8 +259,12 @@ def frame_pairing(folder_path, threshold, interval, remote_capture_dir="/home/te
         else:
             print_to_box(f"[{cam_name}] capture failed")
 
-    
     json_files = [f for f in os.listdir(folder_path) if f.endswith(".json")]
+
+    if not json_files:
+        messagebox.showwarning("Warning", "No JSON files found in the selected folder")
+        return None
+    
     data, timestamps = [], []
     for jf in json_files:
         with open(os.path.join(folder_path, jf), 'r', encoding='utf-8') as fp:
@@ -208,7 +288,7 @@ def frame_pairing(folder_path, threshold, interval, remote_capture_dir="/home/te
             ts = datetime.strptime(fr["timestamp"], "%Y-%m-%d %H:%M:%S.%f")
             idx = sort_idx(ts, reference)
             nearest, best = None, float('inf')
-            for k in (idx-1, idx):
+            for k in (idx-1, idx, idx+1):
                 if 0 <= k < len(reference):
                     diff = abs((ts - reference[k]).total_seconds())
                     if diff < best and diff <= threshold:
@@ -218,20 +298,47 @@ def frame_pairing(folder_path, threshold, interval, remote_capture_dir="/home/te
 
     df = pd.DataFrame(matrix, columns=json_files)
     df.index.name = "Reference_Frame"
-    df.to_csv(os.path.join(folder_path, "aligned_frames.csv"), index=True)
+    output_file = os.path.join(folder_path, "aligned_frames.csv")
+    df.to_csv(output_file, index=True)
+    print_to_box(f"[OK] Frame alignment saved to: {output_file}")
     return df
 
 def choose_folder():
-    folder = filedialog.askdirectory()
-    if not folder: return
+    global consolidated_json_folder
+
+    #Check if we have a consolidated folder from the last stop operation
+    if consolidated_json_folder and os.path.exists(consolidated_json_folder):
+        #Count JSON files in the consolidated folder
+        json_count = len([f for f in os.listdir(consolidated_json_folder) if f.endswith(".json")])
+        response = messagebox.askyesno(
+            "Use Consolidated Folder?",
+            f"Found {json_count} timestamp files from the last session.\n\nFolder: {consolidated_json_folder}\n\nClick 'Yes' to use these files or 'No' to select a different folder."
+        )
+        if response:
+            folder = consolidated_json_folder
+        else:
+            folder = filedialog.askdirectory()
+            if not folder: return
+    else:
+        folder = filedialog.askdirectory()
+        if not folder: return
+
     try:
         th = float(threshold_entry.get())
         iv = float(interval_entry.get())
     except ValueError:
         messagebox.showerror("Error", "Threshold / Interval must be numbers")
         return
-    frame_pairing(folder, th, iv)
-    print_to_box("Frame pairing finished! Output saved to aligned_frames.csv")
+    
+    print_to_box(f"\nProcessing folder: {folder}")
+    result = frame_pairing(folder, th, iv)
+
+    if result is not None:
+        print_to_box("Frame pairing finished! Output saved to aligned_frames.csv")
+        #Reset button color after succesful pairing
+        pair_btn.config(bg="blue")
+    else:
+        print_to_box("Frame pairing failed - check if JSON files are present")
 
 def choose_local_directory():
     global local_base_dir
@@ -239,8 +346,6 @@ def choose_local_directory():
     if selected:
         local_base_dir = selected
         local_dir_label.config(text=f"Selected: {selected}")
-
-
 
 root = tk.Tk()
 root.title("Run all Raspberry Pi")
@@ -279,6 +384,7 @@ tk.Label(root, text="The number of frames stored in the queue(used for writing f
 tk.Label(root, text="Time interval between 2 adjacent frames").place(x=280, y=130)
 tk.Label(root, text="Time delay after no motion detected").place(x=280, y=155)
 tk.Label(root, text="Threshold for motion detection").place(x=280, y=175)
+
 #Add help text for focus distance
 tk.Label(root, text="The focus distance(in meters): 0.1=macro, 0.5=default, 2.0=medium, 10=far (higher value = farther focus)").place(x=280, y=198)
 
@@ -315,9 +421,7 @@ tk.Label(root, text="Normally, this interval should be as same as the 'Sec per f
 output_box = tk.Text(root, width=90, height=21)
 output_box.place(x=40, y=375)   #adjusted y position
 
-
 """light"""
-
 pi_status = {}  # {pi_name: {"canvas": ..., "circle": ...}}
 
 status_frame = tk.LabelFrame(root, text="Pi state", padx=10, pady=10)
@@ -335,7 +439,7 @@ def set_pi_light(pi, color):
     if pi in pi_status:
         canvas = pi_status[pi]["canvas"]
         circle = pi_status[pi]["circle"]
-        canvas.itemconfig(circle, fill=color)
+        root.after(0, lambda: canvas.itemconfig(circle, fill=color))
 
 def init_pi_lights():
     try:
