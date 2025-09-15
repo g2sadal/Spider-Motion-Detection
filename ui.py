@@ -51,7 +51,7 @@ def build_remote_cmd():
     thr   = thres_entry.get().strip()
     focus = focus_entry.get().strip()
 
-    cmd = ["python3", "-u", "/home/terradynamics/Desktop/motion/dual_cam_v11.py",
+    cmd = ["python3", "-u", "/home/terradynamics/Desktop/motion/dual_cam_v12.py",
            "--resolution", res]
 
     if fi:  cmd += ["--frame_interval", fi]
