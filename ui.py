@@ -77,8 +77,9 @@ def build_remote_cmd():
     focus = focus_entry.get().strip()
 
     cmd = ["python3", "-u", "/home/terradynamics/Desktop/motion/dual_cam_v12.py",
-           "--resolution", res]
-
+           "--resolution", res,
+           "--folder_name", session_folder]
+            
     if fi:  cmd += ["--frame_interval", fi]
     if tpf: cmd += ["--timeFPS", tpf]
     if dly: cmd += ["--delay", dly]
