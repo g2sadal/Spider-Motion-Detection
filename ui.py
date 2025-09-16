@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import tkinter as tk
 import subprocess, threading, queue, os, json
 from datetime import datetime, timedelta
@@ -42,8 +43,32 @@ def reader(name, stream):
         q.put((name, line.rstrip()))
     stream.close()
 
-def build_remote_cmd():
+def remote_capture_all():
+    try:
+        with open("IP.txt") as f:
+            hosts = [line.strip().split() for line in f if len(line.strip().split()) == 2]
+    except FileNotFoundError:
+        messagebox.showerror("Error", "IP.txt not found")
+        return
 
+    remote_capture_dir = "/home/terradynamics/captures"
+    capture_script = "/home/terradynamics/Desktop/motion/img_capture.py"
+
+    for cam_name, ip in hosts:
+        ssh_cmd = [
+            "ssh", f"terradynamics@{ip}",
+            f"mkdir -p {remote_capture_dir} && python3 {capture_script} --out_dir {remote_capture_dir}"
+        ]
+
+        if subprocess.call(ssh_cmd) == 0:
+            print_to_box(f"[{cam_name}] capture done (saved on Pi)")
+        else:
+            print_to_box(f"[{cam_name}] capture failed")
+
+def run_capture_thread():
+    threading.Thread(target=remote_capture_all, daemon=True).start()
+
+def build_remote_cmd():
     res   = res_var.get()
     fi    = fi_entry.get().strip()
     tpf   = fps_entry.get().strip()
@@ -68,15 +93,34 @@ def launch_for_host(name, ip):
         proc = subprocess.Popen(
             ["ssh", f"terradynamics@{ip}", remote_cmd],
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1
         )
-        threading.Thread(target=reader, args=(name, proc.stdout), daemon=True).start()
-        set_pi_light(name, "green")
+
+        def reader_thread(stream, stream_name):
+            for line in iter(stream.readline, ''):
+                if line:
+                    q.put((name, f"[{stream_name}] {line.rstrip()}"))
+
+                    if "cam0 started" in line:
+                        set_pi_light(f"{name}_cam0", "green")
+                    if "cam1 started" in line:
+                        set_pi_light(f"{name}_cam1", "green")
+                    if "cam0 failed" in line:
+                        set_pi_light(f"{name}_cam0", "red")
+                    if "cam1 failed" in line:
+                        set_pi_light(f"{name}_cam1", "red")
+
+        threading.Thread(target=reader_thread, args=(proc.stdout, "OUT"), daemon=True).start()
+        threading.Thread(target=reader_thread, args=(proc.stderr, "ERR"), daemon=True).start()
+
         return proc
-    except Exception:
-        set_pi_light(name, "red")
+    
+    except Exception as e:
+        print_to_box(f"[{name}] SSH failed: {e}")
+        set_pi_light(f"{name}_cam0", "red")
+        set_pi_light(f"{name}_cam1", "red")
         return None
 
 def run_remote_program():
@@ -118,7 +162,7 @@ def collect_timestamp_files(local_folders, base_path):
     consolidated_folder = os.path.join(base_path, f"consolidated_{session_folder}")
     os.makedirs(consolidated_folder, exist_ok=True)
 
-    print_to_box(f"\nCollecting timestamp.json files tp: {consolidated_folder}")
+    print_to_box(f"\nCollecting timestamp.json files to: {consolidated_folder}")
 
     json_count = 0
     found_files = set() #Track found files to avoid duplicates
@@ -185,7 +229,8 @@ def stop_program():
 
     # Update lights for all cameras
     for cam_name, _ in hosts:
-        set_pi_light(cam_name, "red")
+        set_pi_light(f"{cam_name}_cam0", "red")
+        set_pi_light(f"{cam_name}_cam1", "red")
 
     print_to_box("All processes terminated.")
 
@@ -238,27 +283,11 @@ def sort_idx(timestamp, ref, left=0, right=None):
     return sort_idx(timestamp, ref, left, mid) if timestamp < ref[mid] else \
            sort_idx(timestamp, ref, mid + 1, right)
 
-def frame_pairing(folder_path, threshold, interval, remote_capture_dir="/home/terradynamics/captures",
-                  capture_script="/home/terradynamics/Desktop/motion/img_capture.py"):
-    try:
-        with open("IP.txt") as f:
-            hosts = [line.strip().split() for line in f if len(line.strip().split()) == 2]
-    except FileNotFoundError:
-        messagebox.showerror("Error", "IP.txt not found")
-        return
-
-    ts_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")   
-
-    for cam_name, ip in hosts:
-        ssh_cmd = [
-            "ssh", f"terradynamics@{ip}",
-            f"python3 {capture_script} --out_dir {remote_capture_dir}"
-        ]
-        if subprocess.call(ssh_cmd) == 0:
-            print_to_box(f"[{cam_name}] capture done (saved on Pi)")
-        else:
-            print_to_box(f"[{cam_name}] capture failed")
-
+def frame_pairing(folder_path, threshold, interval):
+    """ 
+    Frame pairing function without capture functionality -
+    capture is handled separately by the CAPTURE button
+    """
     json_files = [f for f in os.listdir(folder_path) if f.endswith(".json")]
 
     if not json_files:
@@ -347,10 +376,12 @@ def choose_local_directory():
         local_base_dir = selected
         local_dir_label.config(text=f"Selected: {selected}")
 
+# GUI Setup
 root = tk.Tk()
 root.title("Run all Raspberry Pi")
 root.geometry("1020x730")
 
+# Copyright labels
 tk.Label(root, text="Use for Terradynamics Lab only").pack()
 tk.Label(root, text="Copyright: Pucheng Shao").pack()
 
@@ -380,14 +411,13 @@ focus_entry.insert(0, DEFAULTS["focus_distance"])
 focus_entry.grid(row=5, column=1, sticky="w")
 
 tk.Label(root, text="Image size").place(x=300, y=80)
-tk.Label(root, text="The number of frames stored in the queue(used for writing frames into vedio before the motion detected)").place(x=280, y=105)
-tk.Label(root, text="Time interval between 2 adjacent frames").place(x=280, y=130)
-tk.Label(root, text="Time delay after no motion detected").place(x=280, y=155)
-tk.Label(root, text="Threshold for motion detection").place(x=280, y=175)
-
-#Add help text for focus distance
+tk.Label(root, text="The number of frames stored in the queue(used for writing frames into vedio before the motion detected) (5-10)").place(x=280, y=105)
+tk.Label(root, text="Time interval between 2 adjacent frames (as small as possible(consider the performance of Pi))").place(x=280, y=130)
+tk.Label(root, text="Time delay after no motion detected (1-3)").place(x=280, y=155)
+tk.Label(root, text="Threshold for motion detection (0.005-0.02)").place(x=280, y=175)
 tk.Label(root, text="The focus distance(in meters): 0.1=macro, 0.5=default, 2.0=medium, 10=far (higher value = farther focus)").place(x=280, y=198)
 
+#Buttons
 start_btn = tk.Button(root, text="START", width=20, height=2,
                       bg="green", fg="white", command=start_program)
 start_btn.place(x=120, y=245)   #adjusted y position to fit new entry
@@ -406,6 +436,12 @@ pair_btn = tk.Button(root, text="PAIR", width=20, height=2,
                      bg="blue", fg="white", command=choose_folder)
 pair_btn.place(x=600, y=245)    #adjusted y position to fit new entry
 
+# Add CAPTURE button
+capture_btn = tk.Button(root, text="CAPTURE", width=20, height=2,
+                        bg="orange", fg="black", command=run_capture_thread)
+capture_btn.place(x=840, y=245)  
+
+#Threshold and Interval settings
 tk.Label(root, text="Threshold (s):").place(x=300, y=305)   #adjusted y position
 threshold_entry = tk.Entry(root, width=8)
 threshold_entry.insert(0, "0.2")
@@ -425,29 +461,75 @@ output_box.place(x=40, y=375)   #adjusted y position
 pi_status = {}  # {pi_name: {"canvas": ..., "circle": ...}}
 
 status_frame = tk.LabelFrame(root, text="Pi state", padx=10, pady=10)
-status_frame.place(x=720, y=375, width=260, height=200) #adjusted y position
+status_frame.place(x=720, y=375, width=260, height=300) #adjusted y position
 
-def create_status_lights(pi_names):
-    for i, pi in enumerate(pi_names):
-        tk.Label(status_frame, text=pi).grid(row=i, column=0, sticky="w")
-        canvas = tk.Canvas(status_frame, width=20, height=20)
-        canvas.grid(row=i, column=1)
-        circle = canvas.create_oval(2, 2, 18, 18, fill="gray")
-        pi_status[pi] = {"canvas": canvas, "circle": circle}
+def create_cube_lights(pi_names):
+    canvas_size = 240
+    canvas = tk.Canvas(status_frame, width=canvas_size, height=canvas_size, bg="white")
+    canvas.pack()
+
+    cube_points = {
+        0: (60, 60),   # top-front-left
+        1: (140, 60),  # top-front-right
+        2: (60, 140),  # top-back-left
+        3: (140, 140), # top-back-right
+        4: (90, 90),   # bottom-front-left
+        5: (170, 90),  # bottom-front-right
+        6: (90, 170),  # bottom-back-left
+        7: (170, 170), # bottom-back-right
+    }
+
+    edges = [
+        (0, 1), (1, 3), (3, 2), (2, 0), # top face
+        (4, 5), (5, 7), (7, 6), (6, 4), # bottom face
+        (0, 4), (1, 5), (2, 6), (3, 7)  # vertical edges
+    ]
+    for a, b in edges:
+        x1, y1 = cube_points[a]
+        x2, y2 = cube_points[b]
+        canvas.create_line(x1, y1, x2, y2, fill="black")
+
+    for i, pi in enumerate(pi_names[:8]):
+        x, y = cube_points[i]
+
+        dx0, dy0 = 0, 0
+        cam0_id = f"{pi}_cam0"
+        circle0 = canvas.create_oval(x+dx0-5, y+dy0-5, x+dx0+5, y+dy0+5, fill="gray")
+        canvas.create_text(x+dx0, y+dy0-10, text=cam0_id, font=("Arial", 6))
+        pi_status[cam0_id] = {"canvas": canvas, "circle": circle0}
+
+        dx1, dy1 = 10, 10
+        cam1_id = f"{pi}_cam1"
+        circle1 = canvas.create_oval(x+dx1-5, y+dy1-5, x+dx1+5, y+dy1+5, fill="gray")
+        canvas.create_text(x+dx1, y+dy1+10, text=cam1_id, font=("Arial", 6))
+        pi_status[cam1_id] = {"canvas": canvas, "circle": circle1}
 
 def set_pi_light(pi, color):
     if pi in pi_status:
         canvas = pi_status[pi]["canvas"]
         circle = pi_status[pi]["circle"]
+        # Use root.after to ensure thread-safe GUI updates
         root.after(0, lambda: canvas.itemconfig(circle, fill=color))
 
 def init_pi_lights():
     try:
         with open("IP.txt") as f:
             pi_names = [line.strip().split()[0] for line in f if len(line.strip().split()) == 2]
-            create_status_lights(pi_names)
-    except:
-        pass
+            if pi_names:
+                create_cube_lights(pi_names)
+                print(f"Initialized cube visualization for {len(pi_names)} Pis: {pi_names}")
+            else:
+                print("No valid Pi entries found in IP.txt")
+                # Create a demo cube if no IPs found
+                create_cube_lights(["pi1", "pi2", "pi3", "pi4"])
+    except FileNotFoundError:
+        print("IP.txt not found - creating demo cube visualization")
+        # Create a demo cube with sample Pi names
+        create_cube_lights(["pi1", "pi2", "pi3", "pi4"])
+    except Exception as e:
+        print(f"Error initializing Pi lights: {e}")
+        # Create a demo cube as fallback
+        create_cube_lights(["pi1", "pi2", "pi3", "pi4"])
 
 init_pi_lights()
 
