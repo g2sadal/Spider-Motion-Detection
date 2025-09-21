@@ -24,13 +24,13 @@ def calculate_lens_position(focus_distance_meters):
             - 0.5m = close focus (for 70cm box)
             - 2.0m = medium distance
             - 10m = far/infinity focus
-    
+
     Returns:
         lens_position: Value for LensPosition control (0.0 to 10.0)
     """
     # Clamp input to valid range
     focus_distance_meters = max(0.1, min(10.0, focus_distance_meters))
-    
+
     if focus_distance_meters >= 10:
         # Far focus / infinity
         return 0.0
@@ -79,14 +79,14 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
 
     log_file_B = 'motion_timestamps_B.txt'
     log_file_path_B = os.path.join(folder_path, log_file_B)
-    
+
     if os.path.exists(log_file_path_B):
         open(log_file_path_B, 'w').close()
         
     '''frame index initialization(for frame alignment)'''
     frame_index_A = 0
     frame_index_B = 0
-    
+
     '''Create a queue to save frames before recording'''
     frame_storage_A = deque(maxlen = frame_interval)
     frame_storage_B = deque(maxlen = frame_interval)
@@ -132,13 +132,13 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
         picam2_A = Picamera2(0)
         video_config_A = picam2_A.create_still_configuration(main={"size": img_Size, "format": "RGB888"})
         picam2_A.configure(video_config_A)
-        
+
         # Apply calculated focus position
         picam2_A.set_controls({
             "AfMode": controls.AfModeEnum.Manual,  # Manual focus mode
             "LensPosition": lens_position  # Use calculated lens position
         })
-        
+
         picam2_A.start()
         print(f"cam0 started with focus at {focus_distance}m (lens position: {lens_position:.2f})", flush=True)
         cam0_enabled = True
@@ -150,13 +150,13 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
         picam2_B = Picamera2(1)
         video_config_B = picam2_B.create_still_configuration(main={"size": img_Size, "format": "RGB888"})
         picam2_B.configure(video_config_B)
-        
+
         # Apply same focus position to camera B
         picam2_B.set_controls({
             "AfMode": controls.AfModeEnum.Manual,  # Manual focus mode
             "LensPosition": lens_position  # Use calculated lens position
         })
-        
+
         picam2_B.start()
         print(f"cam1 started with focus at {focus_distance}m (lens position: {lens_position:.2f})", flush=True)
         cam1_enabled = True
@@ -208,7 +208,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 frame_storage_B.append(gausBlur_B)
                 frame_storage_color_B.append(frame_B)
                 timestamp_storage_B.append(sensor_timestamp_B)
-            
+
             if (cam0_enabled and len(frame_storage_A) >= frame_interval) or (cam1_enabled and len(frame_storage_B) >= frame_interval):
 
                 if cam0_enabled and len(frame_storage_A) >= frame_interval:
@@ -379,7 +379,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             "timestamp": str(sensor_timestamp_B)
                         })
                         frame_index_B += 1
-                        
+                     
                     '''Same logic for camera B as A'''
                     if motion_detected_B and (not recording_B):
                         frame_index_B = 0
@@ -404,7 +404,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         start_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path_B, "a") as f:
                             f.write(f"Video {num_video_B} (File: {folder_path}/camera_B_{num_video_B}.mp4): Start at {start_timestamp_B}\n")
-                        
+
                         for each_timestamp_B in timestamp_storage_B:
                             timestamp_data_B["frames"].append({
                                 "frame_index": frame_index_B,
@@ -424,14 +424,14 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         start_time_B = time.time()
                         is_timing_B = True
                         print(f"No move detected (Camera B), will stop recording if no move detected in {delay} seconds", flush=True)
-                        
+
                     elif is_timing_B and recording_B:
                         elapsed_time_B = time.time() - start_time_B
                         if elapsed_time_B > delay and recording_B:
                             stop_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                             with open(log_file_path_B, "a") as f:
                                 f.write(f"Video {num_video_B} (File: {folder_path}/camera_B_{num_video_B}.mp4): Stop at {stop_timestamp_B}\n")
-                            
+
                             if timestamp_data_B is not None:
                                 timestamp_data_B["stop_time"] = stop_timestamp_B
                                 
@@ -448,7 +448,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             writer_B.release()
                             writer_B=None
                             print("Stop recording [Camera B]", flush=True)
-                
+
             # preview function
             if enable_preview:
                 preview_list = []
@@ -539,3 +539,4 @@ if __name__ == "__main__":
          motion_threshold=args.motion_threshold,
          focus_distance=args.focus_distance,
          folder_name=args.folder_name)
+
