@@ -30,9 +30,101 @@ RES_CHOICES = [
     "640x480"
 ]
 
+# Per-Pi parameter storgage
+pi_configs = {} # {pi_name: {param: value, ...}}
+current_pi = "ALL" # Currently selected Pi for parameter editing
+
 q = queue.Queue()
 procs = []
 running = False
+
+def load_pi_list():
+    """Load Pi names from IP.txt and initialize their configs"""
+    global pi_configs
+    try:
+        with open("IP.txt") as f:
+            pi_names = []
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 2:
+                    pi_name = parts[0]
+                    pi_names.append(pi_name)
+                    # Initialize each Pi with default parameters
+                    pi_configs[pi_name] = DEFAULTS.copy()
+            
+            # Update Pi selection dropdown
+            pi_menu['menu'].delete(0, 'end')
+            pi_menu['menu'].add_command(label="ALL", command=tk._setit(pi_var, "ALL"))
+            for pi_name in pi_names:
+                pi_menu['menu'].add_command(label=pi_name, command=tk._setit(pi_var, pi_name))
+            
+            print_to_box(f"Loaded {len(pi_names)} Pis from IP.txt: {pi_names}")
+            return pi_names
+            
+    except FileNotFoundError:
+        print_to_box("IP.txt not found - using demo configuration")
+        # Create demo config
+        demo_pis = ["cam0", "cam1", "cam2", "cam3"]
+        for pi_name in demo_pis:
+            pi_configs[pi_name] = DEFAULTS.copy()
+        return demo_pis
+
+
+def on_pi_selection_change(*args):
+    """Called when user changes Pi selection dropdown"""
+    global current_pi
+    current_pi = pi_var.get()
+    update_gui_from_config()
+    print_to_box(f"Selected Pi: {current_pi}")
+
+
+def update_gui_from_config():
+    """Update GUI fields based on currently selected Pi configuration"""
+    if current_pi == "ALL":
+        # Show default values when ALL is selected
+        config = DEFAULTS
+    else:
+        config = pi_configs.get(current_pi, DEFAULTS)
+    
+    # Update all GUI elements with the selected Pi's configuration
+    res_var.set(config["resolution"])
+    
+    # Clear and update entry fields
+    for entry, key in [(fi_entry, "frame_interval"),
+                       (fps_entry, "timeFPS"), 
+                       (delay_entry, "delay"),
+                       (thres_entry, "motion_threshold"),
+                       (focus_entry, "focus_distance")]:
+        entry.delete(0, tk.END)
+        entry.insert(0, config[key])
+
+
+def save_current_config():
+    """Save current GUI values to the selected Pi's configuration"""
+    if current_pi == "ALL":
+        # Apply to all Pis
+        new_config = {
+            "resolution": res_var.get(),
+            "frame_interval": fi_entry.get().strip(),
+            "timeFPS": fps_entry.get().strip(),
+            "delay": delay_entry.get().strip(),
+            "motion_threshold": thres_entry.get().strip(),
+            "focus_distance": focus_entry.get().strip()
+        }
+        for pi_name in pi_configs:
+            pi_configs[pi_name] = new_config.copy()
+        print_to_box(f"Applied settings to ALL Pis")
+    else:
+        # Apply to selected Pi only
+        pi_configs[current_pi] = {
+            "resolution": res_var.get(),
+            "frame_interval": fi_entry.get().strip(),
+            "timeFPS": fps_entry.get().strip(),
+            "delay": delay_entry.get().strip(),
+            "motion_threshold": thres_entry.get().strip(),
+            "focus_distance": focus_entry.get().strip()
+        }
+        print_to_box(f"Applied settings to Pi: {current_pi}")
 
 def print_to_box(msg):
     output_box.insert(tk.END, msg + "\n")
@@ -68,28 +160,29 @@ def remote_capture_all():
 def run_capture_thread():
     threading.Thread(target=remote_capture_all, daemon=True).start()
 
-def build_remote_cmd():
-    res   = res_var.get()
-    fi    = fi_entry.get().strip()
-    tpf   = fps_entry.get().strip()
-    dly   = delay_entry.get().strip()
-    thr   = thres_entry.get().strip()
-    focus = focus_entry.get().strip()
+def build_remote_cmd_for_pi(pi_name):
+    """Build remote command using the specific Pi's configuration"""
+    config = pi_configs.get(pi_name, DEFAULTS)
+    
+    cmd = ["python3", "-u", "/home/terradynamics/Desktop/motion/dual_cam_v12_new.py",
+           "--resolution", config["resolution"], "--folder_name", session_folder]
 
-    cmd = ["python3", "-u", "/home/terradynamics/Desktop/motion/dual_cam_v12.py",
-           "--resolution", res,
-           "--folder_name", session_folder]
-            
-    if fi:  cmd += ["--frame_interval", fi]
-    if tpf: cmd += ["--timeFPS", tpf]
-    if dly: cmd += ["--delay", dly]
-    if thr: cmd += ["--motion_threshold", thr]
-    if focus: cmd += ["--focus_distance", focus]
+
+    # Add parameters if they're not empty
+    if config["frame_interval"]:  cmd += ["--frame_interval", config["frame_interval"]]
+    if config["timeFPS"]: cmd += ["--timeFPS", config["timeFPS"]]
+    if config["delay"]: cmd += ["--delay", config["delay"]]
+    if config["motion_threshold"]: cmd += ["--motion_threshold", config["motion_threshold"]]
+    if config["focus_distance"]: cmd += ["--focus_distance", config["focus_distance"]]
 
     return " ".join(cmd)
 
 def launch_for_host(name, ip):
-    remote_cmd = build_remote_cmd()
+    # Use Pi-specific configuration
+    remote_cmd = build_remote_cmd_for_pi(name)
+
+    print_to_box(f"[{name}] Starting with config: focus={pi_configs[name]['focus_distance']}m, threshold={pi_configs[name]['motion_threshold']}")
+
     try:
         proc = subprocess.Popen(
             ["ssh", f"terradynamics@{ip}", remote_cmd],
@@ -150,8 +243,18 @@ def run_remote_program():
 
 def start_program():
     global session_folder, consolidated_json_folder
+    # Save current configuration before starting
+    save_current_config()
+    
     session_folder = datetime.now().strftime("%Y-%m-%d_%H-%M_test")
-    consolidated_json_folder = None  # Reset consolidated JSON folder on new session
+    consolidated_json_folder = None  # Reset when starting new session
+    
+    # Print configuration summary
+    print_to_box("\n=== Starting with Per-Pi Configuration ===")
+    for pi_name, config in pi_configs.items():
+        print_to_box(f"[{pi_name}] Focus: {config['focus_distance']}m, Threshold: {config['motion_threshold']}")
+    print_to_box("=" * 50)
+
     threading.Thread(target=run_remote_program, daemon=True).start()
 
 def collect_timestamp_files(local_folders, base_path):
@@ -377,17 +480,54 @@ def choose_local_directory():
         local_base_dir = selected
         local_dir_label.config(text=f"Selected: {selected}")
 
+def show_config_summary():
+    """Show a popup with current configuration for all Pis"""
+    summary_window = tk.Toplevel(root)
+    summary_window.title("Configuration Summary")
+    summary_window.geometry("600x400")
+    
+    text_widget = tk.Text(summary_window, wrap=tk.WORD, padx=10, pady=10)
+    text_widget.pack(fill=tk.BOTH, expand=True)
+    
+    text_widget.insert(tk.END, "Current Per-Pi Configuration:\n")
+    text_widget.insert(tk.END, "=" * 50 + "\n\n")
+    
+    for pi_name, config in pi_configs.items():
+        text_widget.insert(tk.END, f"[{pi_name}]\n")
+        for param, value in config.items():
+            text_widget.insert(tk.END, f"  {param}: {value}\n")
+        text_widget.insert(tk.END, "\n")
+    
+    # Add close button
+    tk.Button(summary_window, text="Close", command=summary_window.destroy).pack(pady=10)
+
 # GUI Setup
 root = tk.Tk()
 root.title("Run all Raspberry Pi")
-root.geometry("1020x730")
+root.geometry("1020x780")
 
 # Copyright labels
 tk.Label(root, text="Use for Terradynamics Lab only").pack()
 tk.Label(root, text="Copyright: Pucheng Shao").pack()
 
+# Pi Selection Frame
+pi_frame = tk.LabelFrame(root, text="Pi Selection & Configuration", padx=10, pady=6)
+pi_frame.place(x=40, y=50, width=940, height=60)
+
+tk.Label(pi_frame, text="Configure Pi:").grid(row=0, column=0, sticky="e", padx=5)
+pi_var = tk.StringVar(value="ALL")
+pi_menu = tk.OptionMenu(pi_frame, pi_var, "ALL")
+pi_menu.grid(row=0, column=1, sticky="w", padx=5)
+
+apply_btn = tk.Button(pi_frame, text="Apply Settings", command=save_current_config, bg="orange")
+apply_btn.grid(row=0, column=2, padx=20)
+
+summary_btn = tk.Button(pi_frame, text="View All Configs", command=show_config_summary, bg="lightblue")
+summary_btn.grid(row=0, column=3, padx=10)
+
+# Settings Frame
 setting = tk.LabelFrame(root, text="Settings", padx=10, pady=6)
-setting.place(x=40, y=50, width=940, height=175) #increased height to fit focus setting
+setting.place(x=40, y=120, width=940, height=175) #increased height to fit focus setting
 
 tk.Label(setting, text="Resolution:").grid(row=0, column=0, sticky="e")
 res_var = tk.StringVar(value=DEFAULTS["resolution"])
@@ -411,58 +551,58 @@ focus_entry = tk.Entry(setting, width=10)
 focus_entry.insert(0, DEFAULTS["focus_distance"])
 focus_entry.grid(row=5, column=1, sticky="w")
 
-tk.Label(root, text="Image size").place(x=300, y=80)
-tk.Label(root, text="The number of frames stored in the queue(used for writing frames into vedio before the motion detected) (5-10)").place(x=280, y=105)
-tk.Label(root, text="Time interval between 2 adjacent frames (as small as possible(consider the performance of Pi))").place(x=280, y=130)
-tk.Label(root, text="Time delay after no motion detected (1-3)").place(x=280, y=155)
-tk.Label(root, text="Threshold for motion detection (0.005-0.02)").place(x=280, y=175)
-tk.Label(root, text="The focus distance(in meters): 0.1=macro, 0.5=default, 2.0=medium, 10=far (higher value = farther focus)").place(x=280, y=198)
+tk.Label(root, text="Image size").place(x=300, y=150)
+tk.Label(root, text="The number of frames stored in the queue(used for writing frames into vedio before the motion detected) (5-10)").place(x=280, y=175)
+tk.Label(root, text="Time interval between 2 adjacent frames (as small as possible(consider the performance of Pi))").place(x=280, y=200)
+tk.Label(root, text="Time delay after no motion detected (1-3)").place(x=280, y=225)
+tk.Label(root, text="Threshold for motion detection (0.005-0.02)").place(x=280, y=245)
+tk.Label(root, text="The focus distance(in meters): 0.1=macro, 0.5=default, 2.0=medium, 10=far (higher value = farther focus)").place(x=280, y=268)
 
 #Buttons
 start_btn = tk.Button(root, text="START", width=20, height=2,
                       bg="green", fg="white", command=start_program)
-start_btn.place(x=120, y=245)   #adjusted y position to fit new entry
+start_btn.place(x=120, y=315)   #adjusted y position to fit new entry
 
 select_dir_btn = tk.Button(root, text="Select Save Location", command=choose_local_directory)
-select_dir_btn.place(x=120, y=295)  #adjusted y position to fit new entry
+select_dir_btn.place(x=120, y=365)  #adjusted y position to fit new entry
 
 local_dir_label = tk.Label(root, text="Selected: (Default = ~/Desktop/Terradynamics)", anchor="w")
-local_dir_label.place(x=20, y=325)  #adjusted y position to fit new entry
+local_dir_label.place(x=20, y=395)  #adjusted y position to fit new entry
 
 stop_btn = tk.Button(root, text="STOP", width=20, height=2,
                      bg="red", fg="white", command=stop_program)
-stop_btn.place(x=360, y=245)    #adjusted y position to fit new entry
+stop_btn.place(x=360, y=315)    #adjusted y position to fit new entry
 
 pair_btn = tk.Button(root, text="PAIR", width=20, height=2,
                      bg="blue", fg="white", command=choose_folder)
-pair_btn.place(x=600, y=245)    #adjusted y position to fit new entry
+pair_btn.place(x=600, y=315)    #adjusted y position to fit new entry
 
 # Add CAPTURE button
 capture_btn = tk.Button(root, text="CAPTURE", width=20, height=2,
                         bg="orange", fg="black", command=run_capture_thread)
-capture_btn.place(x=840, y=245)  
+capture_btn.place(x=850, y=315)  
 
 #Threshold and Interval settings
-tk.Label(root, text="Threshold (s):").place(x=300, y=305)   #adjusted y position
+tk.Label(root, text="Threshold (s):").place(x=300, y=375)   #adjusted y position
 threshold_entry = tk.Entry(root, width=8)
 threshold_entry.insert(0, "0.2")
-threshold_entry.place(x=400, y=305) #adjusted y position
-tk.Label(root, text="The threshold used to determine whether two frames can be paired").place(x=470, y=305) #adjusted y position
+threshold_entry.place(x=400, y=375) #adjusted y position
+tk.Label(root, text="The threshold used to determine whether two frames can be paired").place(x=470, y=375) #adjusted y position
 
-tk.Label(root, text="Interval (s):").place(x=315, y=335)    #adjusted y position
+tk.Label(root, text="Interval (s):").place(x=315, y=405)    #adjusted y position
 interval_entry = tk.Entry(root, width=8)
 interval_entry.insert(0, "1.2")
-interval_entry.place(x=400, y=335)  #adjusted y position
-tk.Label(root, text="Normally, this interval should be as same as the 'Sec per frame' in settings").place(x=470, y=335) #adjusted y position
+interval_entry.place(x=400, y=405)  #adjusted y position
+tk.Label(root, text="Normally, this interval should be as same as the 'Sec per frame' in settings").place(x=470, y=405) #adjusted y position
 
-output_box = tk.Text(root, width=90, height=21)
-output_box.place(x=40, y=375)   #adjusted y position
+output_box = tk.Text(root, width=90, height=19)
+output_box.place(x=40, y=445)   #adjusted y position
 
 """light"""
 pi_status = {}  # {pi_name: {"canvas": ..., "circle": ...}}
 
 status_frame = tk.LabelFrame(root, text="Pi state", padx=10, pady=10)
-status_frame.place(x=720, y=375, width=260, height=300) #adjusted y position
+status_frame.place(x=720, y=445, width=260, height=280) #adjusted y position
 
 def create_cube_lights(pi_names):
     canvas_size = 240
@@ -513,25 +653,19 @@ def set_pi_light(pi, color):
         root.after(0, lambda: canvas.itemconfig(circle, fill=color))
 
 def init_pi_lights():
-    try:
-        with open("IP.txt") as f:
-            pi_names = [line.strip().split()[0] for line in f if len(line.strip().split()) == 2]
-            if pi_names:
-                create_cube_lights(pi_names)
-                print(f"Initialized cube visualization for {len(pi_names)} Pis: {pi_names}")
-            else:
-                print("No valid Pi entries found in IP.txt")
-                # Create a demo cube if no IPs found
-                create_cube_lights(["pi1", "pi2", "pi3", "pi4"])
-    except FileNotFoundError:
-        print("IP.txt not found - creating demo cube visualization")
-        # Create a demo cube with sample Pi names
-        create_cube_lights(["pi1", "pi2", "pi3", "pi4"])
-    except Exception as e:
-        print(f"Error initializing Pi lights: {e}")
-        # Create a demo cube as fallback
+    pi_names = load_pi_list()
+    if pi_names:
+        create_cube_lights(pi_names)
+        print_to_box(f"Initialized cube visualization for {len(pi_names)} Pis: {pi_names}")
+    else:
+        print_to_box("No valid Pi entries found in IP.txt")
+        # Create a demo cube if no IPs found
         create_cube_lights(["pi1", "pi2", "pi3", "pi4"])
 
+# Initialize the system
 init_pi_lights()
+
+# Set up the Pi selection change callback
+pi_var.trace('w', on_pi_selection_change)
 
 root.mainloop()
