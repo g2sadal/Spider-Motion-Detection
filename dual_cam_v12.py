@@ -11,6 +11,41 @@ from datetime import datetime
 from collections import deque
 import json
 
+def add_timestamp_overlay(frame, timestamp, camera_name=""):
+    """
+    Add timestamp overlay to frame
+    """
+    # Create a copy to avoid modifying original
+    frame_copy = frame.copy()
+    
+    # Format timestamp string
+    timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    if camera_name:
+        display_text = f"{camera_name}: {timestamp_str}"
+    else:
+        display_text = timestamp_str
+    
+    # Text properties
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.6
+    color = (255, 255, 255)  # White text
+    thickness = 2
+    background_color = (0, 0, 0)  # Black background
+    
+    # Get text size for background rectangle
+    (text_width, text_height), baseline = cv2.getTextSize(display_text, font, font_scale, thickness)
+    
+    # Position (top-left corner with margin)
+    x, y = 10, 30
+    
+    # Draw black background rectangle
+    cv2.rectangle(frame_copy, (x-5, y-text_height-5), (x+text_width+5, y+baseline+5), background_color, -1)
+    
+    # Draw white text
+    cv2.putText(frame_copy, display_text, (x, y), font, font_scale, color, thickness)
+    
+    return frame_copy
+
 def calculate_lens_position(focus_distance_meters):
     """
     Convert focus distance in meters to lens position value.
@@ -287,7 +322,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 
                 if cam0_enabled:
                     if recording and writer_A is not None:
-                        writer_A.write(frame)
+                        timestamped_frame = add_timestamp_overlay(frame, sensor_timestamp_A, "Cam A")
+                        writer_A.write(timestamped_frame)
                         timestamp_data_A["frames"].append({
                             "frame_index": frame_index_A,
                             "timestamp": str(sensor_timestamp_A)
@@ -314,8 +350,11 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         }
                         
                         # write previous frames into video when motion detected
-                        for each in frame_storage_color_A:
-                            writer_A.write(each)
+                        buffered_frames = list(frame_storage_color_A)
+                        buffered_timestamps = list(timestamp_storage_A)
+                        for frame_buf, timestamp_buf in zip(buffered_frames, buffered_timestamps):
+                            timestamped_frame = add_timestamp_overlay(frame_buf, timestamp_buf, "CAM_A")
+                            writer_A.write(timestamped_frame)
                             
                         start_timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path, "a") as f:
@@ -373,7 +412,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 
                 if cam1_enabled:
                     if recording_B and writer_B is not None:
-                        writer_B.write(frame_B)
+                        timestamped_frame_B = add_timestamp_overlay(frame_B, sensor_timestamp_B, "Cam B")   
+                        writer_B.write(timestamped_frame_B)
                         timestamp_data_B["frames"].append({
                             "frame_index": frame_index_B,
                             "timestamp": str(sensor_timestamp_B)
@@ -398,8 +438,11 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             "frames": []
                         }
                         
-                        for each in frame_storage_color_B:
-                            writer_B.write(each)
+                        buffered_frames_B = list(frame_storage_color_B)
+                        buffered_timestamps_B = list(timestamp_storage_B)
+                        for frame_buf_B, timestamp_buf_B in zip(buffered_frames_B, buffered_timestamps_B):
+                            timestamped_frame_B = add_timestamp_overlay(frame_buf_B, timestamp_buf_B, "CAM_B")
+                            writer_B.write(timestamped_frame_B)
                             
                         start_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path_B, "a") as f:
