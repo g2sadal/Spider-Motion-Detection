@@ -27,9 +27,9 @@ def add_timestamp_overlay(frame, timestamp, camera_name=""):
     
     # Text properties
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.6
+    font_scale = 1.2
     color = (255, 255, 255)  # White text
-    thickness = 2
+    thickness = 3
     background_color = (0, 0, 0)  # Black background
     
     # Get text size for background rectangle
