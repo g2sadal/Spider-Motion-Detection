@@ -522,8 +522,13 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         break
                         
             endTime = time.time()
-            if endTime - trialTime < timeFPS:
-                time.sleep(timeFPS - (endTime - trialTime))
+            actual_frame_time = endTime - trialTime
+            actual_fps = 1/actual_frame_time if actual_frame_time > 0 else 0
+            print(f"[BENCHMARK] Frame time: {actual_frame_time:.4f}s | Actual FPS: {actual_fps:.2f}", flush=True)
+            # Commented out to run at max rate:
+            # if endTime - trialTime < timeFPS:
+            #     time.sleep(timeFPS - (endTime - trialTime))
+            
 
     finally:
         if writer_A is not None:
