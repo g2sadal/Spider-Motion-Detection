@@ -11,40 +11,55 @@ from datetime import datetime
 from collections import deque
 import json
 
-def add_timestamp_overlay(frame, timestamp, camera_name=""):
+def add_timestamp_overlay(frame, timestamp, camera_name="", resolution="", current_fps=0.0):
     """
-    Add timestamp overlay to frame
+    Add timestamp and system info overlay to frame with larger text
     """
-    # Create a copy to avoid modifying original
     frame_copy = frame.copy()
     
-    # Format timestamp string
     timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    if camera_name:
-        display_text = f"{camera_name}: {timestamp_str}"
-    else:
-        display_text = timestamp_str
     
-    # Text properties
+    # Build info lines
+    info_lines = [
+        f"{camera_name}",
+        f"{timestamp_str}",
+        f"Resolution: {resolution}",
+        f"FPS: {current_fps:.1f}"
+    ]
+    
+    # Text properties - MUCH BIGGER
     font = cv2.FONT_HERSHEY_SIMPLEX
-
-    font_scale = 1.2
-    color = (255, 255, 255)  # White text
-    thickness = 3
-
-    background_color = (0, 0, 0)  # Black background
+    font_scale = 2.0  # Increased from 1.2
+    color = (255, 255, 255)
+    thickness = 4  # Increased from 3
+    background_color = (0, 0, 0)
+    line_spacing = 10
     
-    # Get text size for background rectangle
-    (text_width, text_height), baseline = cv2.getTextSize(display_text, font, font_scale, thickness)
+    # Calculate dimensions for background box
+    line_heights = []
+    max_width = 0
+    for line in info_lines:
+        (text_width, text_height), baseline = cv2.getTextSize(line, font, font_scale, thickness)
+        line_heights.append(text_height + baseline)
+        max_width = max(max_width, text_width)
     
-    # Position (top-left corner with margin)
-    x, y = 10, 30
+    total_height = sum(line_heights) + line_spacing * (len(info_lines) - 1)
     
-    # Draw black background rectangle
-    cv2.rectangle(frame_copy, (x-5, y-text_height-5), (x+text_width+5, y+baseline+5), background_color, -1)
+    # Position
+    x, y = 15, 40
+    padding = 15
     
-    # Draw white text
-    cv2.putText(frame_copy, display_text, (x, y), font, font_scale, color, thickness)
+    # Draw background
+    cv2.rectangle(frame_copy, 
+                  (x - padding, y - line_heights[0] - padding), 
+                  (x + max_width + padding, y + total_height + padding), 
+                  background_color, -1)
+    
+    # Draw text lines
+    current_y = y
+    for i, line in enumerate(info_lines):
+        cv2.putText(frame_copy, line, (x, current_y), font, font_scale, color, thickness)
+        current_y += line_heights[i] + line_spacing
     
     return frame_copy
 
@@ -123,6 +138,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
     '''frame index initialization(for frame alignment)'''
     frame_index_A = 0
     frame_index_B = 0
+    '''FPS tracking for overlay'''
+    recent_frame_times = deque(maxlen=30)
 
     '''Create a queue to save frames before recording'''
     frame_storage_A = deque(maxlen = frame_interval)
@@ -324,7 +341,10 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 
                 if cam0_enabled:
                     if recording and writer_A is not None:
-                        timestamped_frame = add_timestamp_overlay(frame, sensor_timestamp_A, "Cam A")
+                        timestamped_frame = add_timestamp_overlay(frame, sensor_timestamp_A, 
+                                         camera_name="CAM A", 
+                                         resolution=f"{w}x{h}",
+                                         current_fps=estimated_fps)
                         writer_A.write(timestamped_frame)
                         timestamp_data_A["frames"].append({
                             "frame_index": frame_index_A,
@@ -355,8 +375,11 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         buffered_frames = list(frame_storage_color_A)
                         buffered_timestamps = list(timestamp_storage_A)
                         for frame_buf, timestamp_buf in zip(buffered_frames, buffered_timestamps):
-                            timestamped_frame = add_timestamp_overlay(frame_buf, timestamp_buf, "CAM_A")
-                            writer_A.write(timestamped_frame)
+                            timestamped_frame = add_timestamp_overlay(frame_buf, timestamp_buf, 
+                                         camera_name="CAM A", 
+                                         resolution=f"{w}x{h}",
+                                         current_fps=estimated_fps)
+                        writer_A.write(timestamped_frame)
                             
                         start_timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path, "a") as f:
@@ -414,7 +437,10 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 
                 if cam1_enabled:
                     if recording_B and writer_B is not None:
-                        timestamped_frame_B = add_timestamp_overlay(frame_B, sensor_timestamp_B, "Cam B")   
+                        timestamped_frame_B = add_timestamp_overlay(frame_B, sensor_timestamp_B, 
+                                           camera_name="CAM B", 
+                                           resolution=f"{w}x{h}",
+                                           current_fps=estimated_fps)
                         writer_B.write(timestamped_frame_B)
                         timestamp_data_B["frames"].append({
                             "frame_index": frame_index_B,
@@ -443,8 +469,11 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         buffered_frames_B = list(frame_storage_color_B)
                         buffered_timestamps_B = list(timestamp_storage_B)
                         for frame_buf_B, timestamp_buf_B in zip(buffered_frames_B, buffered_timestamps_B):
-                            timestamped_frame_B = add_timestamp_overlay(frame_buf_B, timestamp_buf_B, "CAM_B")
-                            writer_B.write(timestamped_frame_B)
+                            timestamped_frame_B = add_timestamp_overlay(frame_buf_B, timestamp_buf_B, 
+                                           camera_name="CAM B", 
+                                           resolution=f"{w}x{h}",
+                                           current_fps=estimated_fps)
+                        writer_B.write(timestamped_frame_B)
                             
                         start_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path_B, "a") as f:
@@ -524,6 +553,15 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
             endTime = time.time()
             actual_frame_time = endTime - trialTime
             actual_fps = 1/actual_frame_time if actual_frame_time > 0 else 0
+
+            # Track frame times for stable FPS estimate
+            recent_frame_times.append(actual_frame_time)
+            if len(recent_frame_times) >= 5:
+                avg_frame_time = sum(recent_frame_times) / len(recent_frame_times)
+                estimated_fps = 1/avg_frame_time if avg_frame_time > 0 else 0
+            else:
+                estimated_fps = actual_fps
+
             print(f"[BENCHMARK] Frame time: {actual_frame_time:.4f}s | Actual FPS: {actual_fps:.2f}", flush=True)
             # Commented out to run at max rate:
             # if endTime - trialTime < timeFPS:
