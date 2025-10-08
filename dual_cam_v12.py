@@ -11,7 +11,7 @@ from datetime import datetime
 from collections import deque
 import json
 
-def add_timestamp_overlay(frame, timestamp, camera_name="", resolution="", current_fps=0.0):
+def add_timestamp_overlay(frame, timestamp, camera_name="", resolution="", current_fps=0.0, focus_distance=0.0, motion_threshold=0.0):
     """
     Add timestamp and system info overlay to frame with larger text
     """
@@ -24,7 +24,9 @@ def add_timestamp_overlay(frame, timestamp, camera_name="", resolution="", curre
         f"{camera_name}",
         f"{timestamp_str}",
         f"Resolution: {resolution}",
-        f"FPS: {current_fps:.1f}"
+        f"FPS: {current_fps:.1f}",
+        f"Focus Distance: {focus_distance}m",
+        f"Motion Threshold: {motion_threshold}"
     ]
     
     # Text properties - MUCH BIGGER
@@ -344,7 +346,9 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         timestamped_frame = add_timestamp_overlay(frame, sensor_timestamp_A, 
                                          camera_name="CAM A", 
                                          resolution=f"{w}x{h}",
-                                         current_fps=estimated_fps)
+                                         current_fps=estimated_fps,
+                                         focus_distance=focus_distance,
+                                         motion_threshold=motion_threshold)
                         writer_A.write(timestamped_frame)
                         timestamp_data_A["frames"].append({
                             "frame_index": frame_index_A,
@@ -378,7 +382,9 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             timestamped_frame = add_timestamp_overlay(frame_buf, timestamp_buf, 
                                          camera_name="CAM A", 
                                          resolution=f"{w}x{h}",
-                                         current_fps=estimated_fps)
+                                         current_fps=estimated_fps,
+                                         focus_distance=focus_distance,
+                                         motion_threshold=motion_threshold)
                         writer_A.write(timestamped_frame)
                             
                         start_timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -440,7 +446,9 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                         timestamped_frame_B = add_timestamp_overlay(frame_B, sensor_timestamp_B, 
                                            camera_name="CAM B", 
                                            resolution=f"{w}x{h}",
-                                           current_fps=estimated_fps)
+                                           current_fps=estimated_fps,
+                                           focus_distance=focus_distance,
+                                           motion_threshold=motion_threshold)
                         writer_B.write(timestamped_frame_B)
                         timestamp_data_B["frames"].append({
                             "frame_index": frame_index_B,
@@ -472,7 +480,9 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             timestamped_frame_B = add_timestamp_overlay(frame_buf_B, timestamp_buf_B, 
                                            camera_name="CAM B", 
                                            resolution=f"{w}x{h}",
-                                           current_fps=estimated_fps)
+                                           current_fps=estimated_fps,
+                                           focus_distance=focus_distance,
+                                           motion_threshold=motion_threshold)
                         writer_B.write(timestamped_frame_B)
                             
                         start_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
