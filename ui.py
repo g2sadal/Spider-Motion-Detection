@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox
 import time
 import shutil
 import glob
+import cv2
 
 local_base_dir = None  
 session_folder = ""
@@ -69,6 +70,223 @@ def load_pi_list():
             pi_configs[pi_name] = DEFAULTS.copy()
         return demo_pis
 
+def add_timestamp_overlay(frame, timestamp, camera_name="", resolution="", current_fps=0.0, focus_distance=0.0, motion_threshold=0.0):
+    """
+    Add timestamp and system info overlay to frame with larger text
+    """
+    frame_copy = frame.copy()
+    
+    timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    
+    # Build info lines
+    info_lines = [
+        f"{camera_name}",
+        f"{timestamp_str}",
+        f"Resolution: {resolution}",
+        f"FPS: {current_fps:.1f}",
+        f"Focus Distance: {focus_distance}m",
+        f"Motion Threshold: {motion_threshold}"
+    ]
+    
+    # Text properties
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 2.0
+    color = (255, 255, 255)
+    thickness = 4
+    background_color = (0, 0, 0)
+    line_spacing = 10
+    
+    # Calculate dimensions for background box
+    line_heights = []
+    max_width = 0
+    for line in info_lines:
+        (text_width, text_height), baseline = cv2.getTextSize(line, font, font_scale, thickness)
+        line_heights.append(text_height + baseline)
+        max_width = max(max_width, text_width)
+    
+    total_height = sum(line_heights) + line_spacing * (len(info_lines) - 1)
+    
+    # Position
+    x, y = 15, 40
+    padding = 15
+    
+    # Draw background
+    cv2.rectangle(frame_copy, 
+                  (x - padding, y - line_heights[0] - padding), 
+                  (x + max_width + padding, y + total_height + padding), 
+                  background_color, -1)
+    
+    # Draw text lines
+    current_y = y
+    for i, line in enumerate(info_lines):
+        cv2.putText(frame_copy, line, (x, current_y), font, font_scale, color, thickness)
+        current_y += line_heights[i] + line_spacing
+    
+    return frame_copy
+
+def flip_video_with_timestamps(video_path, json_path, output_path):
+    """
+    Flip video 180 degrees and re-apply timestamps from JSON metadata
+    """
+    print_to_box(f"  Processing: {os.path.basename(video_path)}")
+    
+    # Load JSON metadata
+    try:
+        with open(json_path, 'r') as f:
+            metadata = json.load(f)
+    except FileNotFoundError:
+        print_to_box(f"    WARNING: JSON file not found, flipping without timestamps")
+        metadata = None
+    
+    # Open input video
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print_to_box(f"    ERROR: Could not open video")
+        return False
+    
+    # Get video properties
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Create output video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    if not out.isOpened():
+        print_to_box(f"    ERROR: Could not create output video")
+        cap.release()
+        return False
+    
+    # Extract metadata if available
+    if metadata:
+        camera_name = "CAM A" if "camera_A" in video_path else "CAM B"
+        resolution = f"{width}x{height}"
+        focus_distance = metadata.get("focus_distance", 0.0)
+        # Try to get motion_threshold from metadata, default to 0.005 if not found
+        motion_threshold = metadata.get("motion_threshold", 0.005)
+        frames_metadata = metadata.get("frames", [])
+    
+    frame_count = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Flip frame 180 degrees
+        flipped_frame = cv2.rotate(frame, cv2.ROTATE_180)
+        
+        # Re-apply timestamp if metadata exists
+        if metadata and frame_count < len(frames_metadata):
+            frame_meta = frames_metadata[frame_count]
+            timestamp_str = frame_meta.get("timestamp", "")
+            
+            try:
+                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S.%f")
+                flipped_frame = add_timestamp_overlay(
+                    flipped_frame, 
+                    timestamp, 
+                    camera_name=camera_name,
+                    resolution=resolution,
+                    current_fps=fps,
+                    focus_distance=focus_distance,
+                    motion_threshold=motion_threshold
+                )
+            except (ValueError, KeyError):
+                pass  # Skip timestamp if parsing fails
+        
+        out.write(flipped_frame)
+        frame_count += 1
+        
+        # Progress indicator every 30 frames
+        if frame_count % 30 == 0:
+            progress = (frame_count / total_frames) * 100 if total_frames > 0 else 0
+            print_to_box(f"    Progress: {progress:.1f}% ({frame_count}/{total_frames})")
+    
+    print_to_box(f"    Completed: {frame_count} frames")
+    
+    cap.release()
+    out.release()
+    return True
+
+
+def flip_all_videos(base_path, session_folder):
+    """
+    Flip all downloaded videos after stopping recording
+    """
+    print_to_box("\n=== Starting Video Flip Post-Processing ===")
+    
+    try:
+        with open("IP.txt") as f:
+            hosts = [line.strip().split() for line in f if len(line.strip().split()) == 2]
+    except FileNotFoundError:
+        print_to_box("ERROR: IP.txt not found")
+        return
+    
+    total_processed = 0
+    total_failed = 0
+    
+    for cam_name, _ in hosts:
+        folder_path = os.path.join(base_path, f"{cam_name}_{session_folder}")
+        
+        if not os.path.exists(folder_path):
+            continue
+        
+        # Find videos in the session subfolder
+        session_subfolder = os.path.join(folder_path, session_folder)
+        if not os.path.exists(session_subfolder):
+            continue
+            
+        video_files = glob.glob(os.path.join(session_subfolder, "camera_*.mp4"))
+        
+        print_to_box(f"\n[{cam_name}] Found {len(video_files)} videos to flip")
+        
+        for video_path in video_files:
+            # Skip already processed files
+            if "_original" in video_path:
+                continue
+                
+            print_to_box(f"[{cam_name}] Flipping: {os.path.basename(video_path)}")
+            
+            # Find corresponding JSON
+            base_name = os.path.basename(video_path)
+            video_name = os.path.splitext(base_name)[0]
+            json_name = f"{video_name}_timestamp.json"
+            json_path = os.path.join(session_subfolder, json_name)
+            
+            # Create backup
+            backup_path = video_path.replace(".mp4", "_original.mp4")
+            if not os.path.exists(backup_path):
+                try:
+                    os.rename(video_path, backup_path)
+                except Exception as e:
+                    print_to_box(f"  ERROR: Could not create backup: {e}")
+                    total_failed += 1
+                    continue
+            else:
+                backup_path_used = video_path.replace(".mp4", "_original.mp4")
+                backup_path = backup_path_used
+            
+            # Process video
+            try:
+                success = flip_video_with_timestamps(backup_path, json_path, video_path)
+                if success:
+                    print_to_box(f"[{cam_name}] ✓ Flipped successfully")
+                    total_processed += 1
+                else:
+                    print_to_box(f"[{cam_name}] ✗ Flip failed")
+                    total_failed += 1
+            except Exception as e:
+                print_to_box(f"[{cam_name}] ERROR: {e}")
+                total_failed += 1
+    
+    print_to_box(f"\n=== Post-Processing Complete ===")
+    print_to_box(f"Successfully flipped: {total_processed} videos")
+    if total_failed > 0:
+        print_to_box(f"Failed: {total_failed} videos")
+    print_to_box("=" * 50)
 
 def on_pi_selection_change(*args):
     """Called when user changes Pi selection dropdown"""
@@ -379,6 +597,21 @@ def stop_program():
     else:
         print_to_box("\n[WARNING] No data was successfully downloaded")
         consolidated_json_folder = None
+
+        # Ask user if they want to flip videos
+    if downloaded_folders:
+        flip_response = messagebox.askyesno(
+            "Flip Videos?",
+            f"Downloaded data from {len(downloaded_folders)} cameras.\n\n"
+            "Flip all videos 180° and re-apply timestamps?\n\n"
+            "(Videos are currently upside-down from camera mounting)\n"
+            "(Original files will be saved as *_original.mp4)"
+        )
+        
+        if flip_response:
+            flip_all_videos(local_base, session_folder)
+            print_to_box("\n✓ Video flipping complete!")
+            messagebox.showinfo("Complete", "All videos have been flipped and timestamps re-applied!")
 
 def sort_idx(timestamp, ref, left=0, right=None):
     if right is None: right = len(ref)
