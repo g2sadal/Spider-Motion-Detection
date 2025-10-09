@@ -11,60 +11,6 @@ from datetime import datetime
 from collections import deque
 import json
 
-def add_timestamp_overlay(frame, timestamp, camera_name="", resolution="", current_fps=0.0, focus_distance=0.0, motion_threshold=0.0):
-    """
-    Add timestamp and system info overlay to frame with larger text
-    """
-    frame_copy = frame.copy()
-    
-    timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    
-    # Build info lines
-    info_lines = [
-        f"{camera_name}",
-        f"{timestamp_str}",
-        f"Resolution: {resolution}",
-        f"FPS: {current_fps:.1f}",
-        f"Focus Distance: {focus_distance}m",
-        f"Motion Threshold: {motion_threshold}"
-    ]
-    
-    # Text properties - MUCH BIGGER
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 2.0  # Increased from 1.2
-    color = (255, 255, 255)
-    thickness = 4  # Increased from 3
-    background_color = (0, 0, 0)
-    line_spacing = 10
-    
-    # Calculate dimensions for background box
-    line_heights = []
-    max_width = 0
-    for line in info_lines:
-        (text_width, text_height), baseline = cv2.getTextSize(line, font, font_scale, thickness)
-        line_heights.append(text_height + baseline)
-        max_width = max(max_width, text_width)
-    
-    total_height = sum(line_heights) + line_spacing * (len(info_lines) - 1)
-    
-    # Position
-    x, y = 15, 40
-    padding = 15
-    
-    # Draw background
-    cv2.rectangle(frame_copy, 
-                  (x - padding, y - line_heights[0] - padding), 
-                  (x + max_width + padding, y + total_height + padding), 
-                  background_color, -1)
-    
-    # Draw text lines
-    current_y = y
-    for i, line in enumerate(info_lines):
-        cv2.putText(frame_copy, line, (x, current_y), font, font_scale, color, thickness)
-        current_y += line_heights[i] + line_spacing
-    
-    return frame_copy
-
 def calculate_lens_position(focus_distance_meters):
     """
     Convert focus distance in meters to lens position value.
@@ -343,13 +289,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 
                 if cam0_enabled:
                     if recording and writer_A is not None:
-                        timestamped_frame = add_timestamp_overlay(frame, sensor_timestamp_A, 
-                                         camera_name="CAM A", 
-                                         resolution=f"{w}x{h}",
-                                         current_fps=estimated_fps,
-                                         focus_distance=focus_distance,
-                                         motion_threshold=motion_threshold)
-                        writer_A.write(timestamped_frame)
+                        writer_A.write(frame)
                         timestamp_data_A["frames"].append({
                             "frame_index": frame_index_A,
                             "timestamp": str(sensor_timestamp_A)
@@ -375,17 +315,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             "frames": []
                         }
                         
-                        # write previous frames into video when motion detected
-                        buffered_frames = list(frame_storage_color_A)
-                        buffered_timestamps = list(timestamp_storage_A)
-                        for frame_buf, timestamp_buf in zip(buffered_frames, buffered_timestamps):
-                            timestamped_frame = add_timestamp_overlay(frame_buf, timestamp_buf, 
-                                         camera_name="CAM A", 
-                                         resolution=f"{w}x{h}",
-                                         current_fps=estimated_fps,
-                                         focus_distance=focus_distance,
-                                         motion_threshold=motion_threshold)
-                        writer_A.write(timestamped_frame)
+                        for each in frame_storage_color_A:
+                            writer_A.write(each)
                             
                         start_timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path, "a") as f:
@@ -443,13 +374,7 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                 
                 if cam1_enabled:
                     if recording_B and writer_B is not None:
-                        timestamped_frame_B = add_timestamp_overlay(frame_B, sensor_timestamp_B, 
-                                           camera_name="CAM B", 
-                                           resolution=f"{w}x{h}",
-                                           current_fps=estimated_fps,
-                                           focus_distance=focus_distance,
-                                           motion_threshold=motion_threshold)
-                        writer_B.write(timestamped_frame_B)
+                        writer_B.write(frame_B)
                         timestamp_data_B["frames"].append({
                             "frame_index": frame_index_B,
                             "timestamp": str(sensor_timestamp_B)
@@ -474,16 +399,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
                             "frames": []
                         }
                         
-                        buffered_frames_B = list(frame_storage_color_B)
-                        buffered_timestamps_B = list(timestamp_storage_B)
-                        for frame_buf_B, timestamp_buf_B in zip(buffered_frames_B, buffered_timestamps_B):
-                            timestamped_frame_B = add_timestamp_overlay(frame_buf_B, timestamp_buf_B, 
-                                           camera_name="CAM B", 
-                                           resolution=f"{w}x{h}",
-                                           current_fps=estimated_fps,
-                                           focus_distance=focus_distance,
-                                           motion_threshold=motion_threshold)
-                        writer_B.write(timestamped_frame_B)
+                        for each in frame_storage_color_B:
+                            writer_B.write(each)
                             
                         start_timestamp_B = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         with open(log_file_path_B, "a") as f:
@@ -572,10 +489,8 @@ def main(enable_preview=False, enable_contour=False, frame_interval=10, resoluti
             else:
                 estimated_fps = actual_fps
 
-            print(f"[BENCHMARK] Frame time: {actual_frame_time:.4f}s | Actual FPS: {actual_fps:.2f}", flush=True)
-            # Commented out to run at max rate:
-            # if endTime - trialTime < timeFPS:
-            #     time.sleep(timeFPS - (endTime - trialTime))
+            if endTime - trialTime < timeFPS:
+                time.sleep(timeFPS - (endTime - trialTime))
             
 
     finally:
