@@ -19,12 +19,26 @@ frame_queue_B = Queue(maxsize=50)
 picam2_A = None
 picam2_B = None
 
-img_Size = (4608,2592) # max is 4608x2592, original is 2304x1296, ration is ~2:1
-buffLen = 10 # number of frames to store in buffer
-thresh_val = 0.005 # percentage of different pixels to qualify as motion
-FPS = 1
-focus_distance = 0.5
-lens_position = 2.0
+# Parse resolution
+try:
+    w, h = map(int, args.resolution.lower().split('x'))
+    img_Size = (w, h)
+except ValueError:
+    raise ValueError("--resolution must be 'widthxheight', e.g. 2304x1296")
+
+buffLen = args.frame_interval
+thresh_val = args.motion_threshold
+FPS = 1 / args.timeFPS  # Convert seconds per frame to FPS
+focus_distance = args.focus_distance
+
+# Calculate lens position from focus distance
+if focus_distance >= 10:
+    lens_position = 0.0
+else:
+    lens_position = 1.0 / focus_distance
+    lens_position = min(10.0, max(0.0, lens_position))
+
+print(f"Focus Distance: {focus_distance}m -> Lens Position: {lens_position:.2f}", flush=True)
 
 #Stop events
 stop_event_A = threading.Event()
@@ -85,7 +99,7 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
         print(f"[{camName}] Camera init failed: {e}", flush=True)
         
 
-def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path):
+def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, delay):
     """Thread 2: Motion detection and recording"""
     # Initialize all variables
     recording = False
@@ -191,7 +205,7 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path):
                         if is_timing:
                             elapsed_time = time.time() - start_time
                             
-                            if elapsed_time > 2.0:
+                            if elapsed_time > delay:
                                 # STOP RECORDING
                                 stop_timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                                 
@@ -253,9 +267,55 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path):
         
         
 if __name__ == "__main__":
-    folder_name = dt.datetime.now().strftime("%Y-%m-%d_%H-%M_test")
-    folder_path = os.path.join(".", folder_name)
-    os.makedirs(folder_path, exist_ok = True)
+    # Add argparse
+    parser = argparse.ArgumentParser(description="Parallel dual camera motion detection")
+    
+    parser.add_argument("--resolution", default="4608x2592",
+                        help="Image resolution WxH, e.g. 2304x1296")
+    parser.add_argument("--frame_interval", type=int, default=10,
+                        help="Frames between background updates")
+    parser.add_argument("--timeFPS", type=float, default=1.2,
+                        help="Seconds per frame (inverse of FPS)")
+    parser.add_argument("--delay", type=float, default=2.0,
+                        help="Time delay after no motion detected")
+    parser.add_argument("--motion_threshold", type=float, default=0.005,
+                        help="Threshold for motion detection")
+    parser.add_argument("--focus_distance", type=float, default=0.5,
+                        help="Focus distance in meters (0.1-10)")
+    parser.add_argument("--folder_name", type=str, default=None,
+                        help="Folder name to use for saving files")
+    
+    args = parser.parse_args()
+    
+    # Parse resolution
+    try:
+        w, h = map(int, args.resolution.lower().split('x'))
+        img_Size = (w, h)
+    except ValueError:
+        raise ValueError("--resolution must be 'widthxheight', e.g. 2304x1296")
+
+    buffLen = args.frame_interval
+    thresh_val = args.motion_threshold
+    FPS = 1 / args.timeFPS
+    focus_distance = args.focus_distance
+
+    # Calculate lens position from focus distance
+    if focus_distance >= 10:
+        lens_position = 0.0
+    else:
+        lens_position = 1.0 / focus_distance
+        lens_position = min(10.0, max(0.0, lens_position))
+
+    print(f"Focus Distance: {focus_distance}m -> Lens Position: {lens_position:.2f}", flush=True)
+    
+    # Use the folder name from UI, or generate one if not provided
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    if args.folder_name:
+        folder_name = args.folder_name
+    else:
+        folder_name = dt.datetime.now().strftime("%Y-%m-%d_%H-%M_test")
+    folder_path = os.path.join(base_dir, folder_name)
+    os.makedirs(folder_path, exist_ok=True)
     
     '''Create a txt file to save the starting time and ending time of each vedio'''
     log_file_A = "motion_timestamps_A.txt"
@@ -274,8 +334,8 @@ if __name__ == "__main__":
     # Create threads
     t1 = threading.Thread(target = cameraBuffer, args = (0, frame_queue_A, stop_event_A, "cam_A"), daemon=True)
     t2 = threading.Thread(target = cameraBuffer, args = (1, frame_queue_B, stop_event_B, "cam_B"), daemon=True)
-    t3 = threading.Thread(target = motionDetect, args = (frame_queue_A, stop_event_A, "cam_A", folder_path, log_file_path_A), daemon=True)
-    t4 = threading.Thread(target = motionDetect, args = (frame_queue_B, stop_event_B, "cam_B", folder_path, log_file_path_B), daemon=True)
+    t3 = threading.Thread(target = motionDetect, args = (frame_queue_A, stop_event_A, "cam_A", folder_path, log_file_path_A, args.delay), daemon=True)
+    t4 = threading.Thread(target = motionDetect, args = (frame_queue_B, stop_event_B, "cam_B", folder_path, log_file_path_B, args.delay), daemon=True)
     
     # Start all threads
     t1.start()
