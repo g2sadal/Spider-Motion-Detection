@@ -43,7 +43,8 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
         print(f"cam{camera_id} started", flush=True)
         
         frame_count = 0
-        
+        fps_start_time = time.time()    # Track FPS
+
         # Run continuously until stop event
         while not stop_event.is_set():
             try:
@@ -61,7 +62,9 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                     frame_count += 1
                     
                     if frame_count % 50 == 0:
-                        print(f"[{camName}] Captured {frame_count} frames", flush=True)
+                        elapsed = time.time() - fps_start_time
+                        current_fps = frame_count / elapsed if elapsed > 0 else 0
+                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f}", flush=True)
                         
                 except:
                     pass  # Queue full, skip frame
