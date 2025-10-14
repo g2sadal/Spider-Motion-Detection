@@ -19,27 +19,6 @@ frame_queue_B = Queue(maxsize=50)
 picam2_A = None
 picam2_B = None
 
-# Parse resolution
-try:
-    w, h = map(int, args.resolution.lower().split('x'))
-    img_Size = (w, h)
-except ValueError:
-    raise ValueError("--resolution must be 'widthxheight', e.g. 2304x1296")
-
-buffLen = args.frame_interval
-thresh_val = args.motion_threshold
-FPS = 1 / args.timeFPS  # Convert seconds per frame to FPS
-focus_distance = args.focus_distance
-
-# Calculate lens position from focus distance
-if focus_distance >= 10:
-    lens_position = 0.0
-else:
-    lens_position = 1.0 / focus_distance
-    lens_position = min(10.0, max(0.0, lens_position))
-
-print(f"Focus Distance: {focus_distance}m -> Lens Position: {lens_position:.2f}", flush=True)
-
 #Stop events
 stop_event_A = threading.Event()
 stop_event_B = threading.Event()
@@ -61,7 +40,7 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
         })
         
         camera.start()
-        print(f"[{camName}] Camera started", flush=True)
+        print(f"cam{camera_id} started", flush=True)
         
         frame_count = 0
         
@@ -93,7 +72,7 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                 time.sleep(0.1)
         
         camera.stop()
-        print(f"[{camName}] Camera stopped", flush=True)
+        print(f"cam{camera_id} failed: {e}", flush=True)
         
     except Exception as e:
         print(f"[{camName}] Camera init failed: {e}", flush=True)
