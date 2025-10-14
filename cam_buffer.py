@@ -60,13 +60,18 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                 try:
                     frame_queue.put((frame.copy(), sensor_timestamp), timeout=1.0)
                     frame_count += 1
-                    
+
                     if frame_count % 50 == 0:
                         elapsed = time.time() - fps_start_time
                         current_fps = frame_count / elapsed if elapsed > 0 else 0
-                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f}", flush=True)
+                        queue_usage = frame_queue.qsize()
+                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/50", flush=True)
                         
+                        # Warn if queue is getting full
+                        if queue_usage > 45:
+                            print(f"[{camName}] ⚠️ WARNING: Queue nearly full! Processing may be too slow.", flush=True)
                 except:
+                    print(f"[{camName}] WARNING: Queue full! Frame {frame_count} dropped at {sensor_timestamp}", flush=True)
                     pass  # Queue full, skip frame
                     
             except Exception as e:
