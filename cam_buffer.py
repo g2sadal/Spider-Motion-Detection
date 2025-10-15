@@ -12,8 +12,8 @@ from queue import Queue, Empty
 from libcamera import controls
 
 # Thread-safe queues
-frame_queue_A = Queue(maxsize=50)
-frame_queue_B = Queue(maxsize=50)
+frame_queue_A = Queue(maxsize=200)
+frame_queue_B = Queue(maxsize=200)
 
 # Initialize cameras globally
 picam2_A = None
@@ -65,7 +65,7 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                         elapsed = time.time() - fps_start_time
                         current_fps = frame_count / elapsed if elapsed > 0 else 0
                         queue_usage = frame_queue.qsize()
-                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/50", flush=True)
+                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/200", flush=True)
                         
                         # Warn if queue is getting full
                         if queue_usage > 45:
@@ -80,11 +80,10 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                 time.sleep(0.1)
         
         camera.stop()
-        print(f"cam{camera_id} failed: {e}", flush=True)
+        print(f"[{camName}] Camera stopped", flush=True)
         
     except Exception as e:
-        print(f"[{camName}] Camera init failed: {e}", flush=True)
-        
+        print(f"[{camName}] Camera init failed: {e}", flush=True)    
 
 def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, delay):
     """Thread 2: Motion detection and recording"""
@@ -96,6 +95,7 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
     timestamp_data = None
     frame_index = 0
     start_time = None
+    current_filename = None
     
     # Buffers
     gray_buffer = deque(maxlen=buffLen)
@@ -148,7 +148,8 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                         frame_index = 0
                         num_video += 1
                         
-                        filename = f"{folder_path}/{camName}_{num_video}.mp4"
+                        filename = f"{folder_path}/camera_{camName}_{num_video}.mp4"
+                        current_filename = filename
                         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                         writer = cv2.VideoWriter(filename, fourcc, FPS, img_Size)
                         
@@ -162,6 +163,7 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                             "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                             "focus_distance": focus_distance,
                             "lens_position": lens_position,
+                            "motion_threshold": thresh_val,
                             "frames": []
                         }
                         
@@ -199,19 +201,39 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                                 with open(log_file_path, "a") as f:
                                     f.write(f"Video {num_video} ({camName}): Stop at {stop_timestamp}\n")
                                 
-                                if timestamp_data is not None:
-                                    timestamp_data["stop_time"] = stop_timestamp
-                                    
-                                    json_file = f"{camName}_{num_video}_timestamp.json"
-                                    json_path = os.path.join(folder_path, json_file)
-                                    
-                                    with open(json_path, "w", encoding="utf-8") as jf:
-                                        json.dump(timestamp_data, jf, indent=4)
-                                
                                 if writer is not None:
                                     writer.release()
                                     writer = None
-                                
+
+                                # Re-encode with correct timing
+                                if timestamp_data is not None:
+                                    original_video = current_filename
+                                    temp_video = filename.replace(".mp4", "_temp.mp4")
+                                    json_file = f"{camName}_{num_video}_timestamp.json"
+                                    json_path = os.path.join(folder_path, json_file)
+                                    
+                                    # Save JSON first
+                                    timestamp_data["stop_time"] = stop_timestamp
+                                    with open(json_path, "w", encoding="utf-8") as jf:
+                                        json.dump(timestamp_data, jf, indent=4)
+                                    
+                                    # Re-encode with correct FPS
+                                    try:
+                                        measured_fps = fix_video_timing(original_video, json_path, temp_video)
+                                        
+                                        # Replace original with corrected version
+                                        os.remove(original_video)
+                                        os.rename(temp_video, original_video)
+                                        
+                                        # Update JSON with measured FPS
+                                        timestamp_data["measured_fps"] = measured_fps
+                                        with open(json_path, "w", encoding="utf-8") as jf:
+                                            json.dump(timestamp_data, jf, indent=4)
+                                            
+                                        print(f"[{camName}] Video re-encoded at {measured_fps:.2f} FPS", flush=True)
+                                    except Exception as e:
+                                        print(f"[{camName}] Warning: Could not fix timing: {e}", flush=True)
+
                                 recording = False
                                 is_timing = False
                                 print(f"[{camName}] Stopped recording: {frame_index} frames", flush=True)
@@ -252,6 +274,49 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
         import traceback
         traceback.print_exc()    
         
+def fix_video_timing(video_path, json_path, output_path):
+    """Re-encode video with correct frame timing based on timestamps"""
+    import json
+    
+    # Load timestamps
+    with open(json_path, 'r') as f:
+        metadata = json.load(f)
+    
+    frames_data = metadata['frames']
+    
+    # Calculate inter-frame intervals
+    timestamps = []
+    for frame_data in frames_data:
+        ts = dt.datetime.strptime(frame_data['timestamp'], "%Y-%m-%d %H:%M:%S.%f")
+        timestamps.append(ts)
+    
+    # Calculate average FPS from actual timestamps
+    if len(timestamps) > 1:
+        total_duration = (timestamps[-1] - timestamps[0]).total_seconds()
+        actual_fps = len(timestamps) / total_duration if total_duration > 0 else 1.0
+    else:
+        actual_fps = 1.0
+    
+    print(f"Re-encoding {video_path} at {actual_fps:.2f} FPS (measured from timestamps)")
+    
+    # Re-encode video
+    cap = cv2.VideoCapture(video_path)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, actual_fps, (width, height))
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        out.write(frame)
+    
+    cap.release()
+    out.release()
+    
+    return actual_fps
         
 if __name__ == "__main__":
     # Add argparse
