@@ -115,7 +115,7 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                 gaus_blur = cv2.GaussianBlur(gray, (5, 5), 0)
                 
                 # Store BOTH color and gray
-                color_buffer.append(color_frame.copy())
+                color_buffer.append(color_frame)
                 gray_buffer.append(gaus_blur)
                 timestamp_buffer.append(timestamp)
                 
@@ -150,7 +150,7 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                         
                         filename = f"{folder_path}/camera_{camName}_{num_video}.mp4"
                         current_filename = filename
-                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        fourcc = cv2.VideoWriter_fourcc(*'H264')
                         writer = cv2.VideoWriter(filename, fourcc, FPS, img_Size)
                         
                         if not writer.isOpened():
@@ -205,10 +205,8 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                                     writer.release()
                                     writer = None
 
-                                # Re-encode with correct timing
+                               # Re-encode with correct timing (in background thread)
                                 if timestamp_data is not None:
-                                    original_video = current_filename
-                                    temp_video = filename.replace(".mp4", "_temp.mp4")
                                     json_file = f"{camName}_{num_video}_timestamp.json"
                                     json_path = os.path.join(folder_path, json_file)
                                     
@@ -217,22 +215,31 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                                     with open(json_path, "w", encoding="utf-8") as jf:
                                         json.dump(timestamp_data, jf, indent=4)
                                     
-                                    # Re-encode with correct FPS
-                                    try:
-                                        measured_fps = fix_video_timing(original_video, json_path, temp_video)
-                                        
-                                        # Replace original with corrected version
-                                        os.remove(original_video)
-                                        os.rename(temp_video, original_video)
-                                        
-                                        # Update JSON with measured FPS
-                                        timestamp_data["measured_fps"] = measured_fps
-                                        with open(json_path, "w", encoding="utf-8") as jf:
-                                            json.dump(timestamp_data, jf, indent=4)
+                                    # Re-encode in background (NON-BLOCKING)
+                                    video_to_fix = current_filename
+                                    json_to_use = json_path
+                                    
+                                    def background_reencode():
+                                        try:
+                                            temp_video = video_to_fix.replace(".mp4", "_temp.mp4")
+                                            measured_fps = fix_video_timing(video_to_fix, json_to_use, temp_video)
                                             
-                                        print(f"[{camName}] Video re-encoded at {measured_fps:.2f} FPS", flush=True)
-                                    except Exception as e:
-                                        print(f"[{camName}] Warning: Could not fix timing: {e}", flush=True)
+                                            # Replace original with corrected version
+                                            os.remove(video_to_fix)
+                                            os.rename(temp_video, video_to_fix)
+                                            
+                                            # Update JSON with measured FPS
+                                            with open(json_to_use, 'r') as f:
+                                                data = json.load(f)
+                                            data["measured_fps"] = measured_fps
+                                            with open(json_to_use, 'w') as f:
+                                                json.dump(data, f, indent=4)
+                                                
+                                            print(f"[{camName}] Video re-encoded at {measured_fps:.2f} FPS", flush=True)
+                                        except Exception as e:
+                                            print(f"[{camName}] Warning: Could not fix timing: {e}", flush=True)
+                                    
+                                    threading.Thread(target=background_reencode, daemon=True).start()
 
                                 recording = False
                                 is_timing = False
