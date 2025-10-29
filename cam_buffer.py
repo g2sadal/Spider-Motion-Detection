@@ -12,8 +12,8 @@ from queue import Queue, Empty
 from libcamera import controls
 
 # Thread-safe queues
-frame_queue_A = Queue(maxsize=200)
-frame_queue_B = Queue(maxsize=200)
+frame_queue_A = Queue(maxsize=500)
+frame_queue_B = Queue(maxsize=500)
 
 # Initialize cameras globally
 picam2_A = None
@@ -23,7 +23,7 @@ picam2_B = None
 stop_event_A = threading.Event()
 stop_event_B = threading.Event()
 
-def cameraBuffer(camera_id, frame_queue, stop_event, camName):
+def cameraBuffer(camera_id, frame_queue, stop_event, camName, target_interval):
     """Thread 1: Continuous frame capture"""
     try:
         # Initialize camera
@@ -65,7 +65,7 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                         elapsed = time.time() - fps_start_time
                         current_fps = frame_count / elapsed if elapsed > 0 else 0
                         queue_usage = frame_queue.qsize()
-                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/200", flush=True)
+                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/500", flush=True)
                         
                         # Warn if queue is getting full
                         if queue_usage > 45:
@@ -73,6 +73,11 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName):
                 except:
                     print(f"[{camName}] WARNING: Queue full! Frame {frame_count} dropped at {sensor_timestamp}", flush=True)
                     pass  # Queue full, skip frame
+            
+                elapsed = time.time() - frame_start_time
+                if elapsed < target_interval:
+                    sleep_time = target_interval - elapsed
+                    time.sleep(sleep_time)
                     
             except Exception as e:
                 if not stop_event.is_set():
@@ -150,7 +155,7 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                         
                         filename = f"{folder_path}/camera_{camName}_{num_video}.mp4"
                         current_filename = filename
-                        fourcc = cv2.VideoWriter_fourcc(*'H264')
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                         writer = cv2.VideoWriter(filename, fourcc, FPS, img_Size)
                         
                         if not writer.isOpened():
@@ -216,30 +221,30 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                                         json.dump(timestamp_data, jf, indent=4)
                                     
                                     # Re-encode in background (NON-BLOCKING)
-                                    video_to_fix = current_filename
-                                    json_to_use = json_path
-                                    
-                                    def background_reencode():
-                                        try:
-                                            temp_video = video_to_fix.replace(".mp4", "_temp.mp4")
-                                            measured_fps = fix_video_timing(video_to_fix, json_to_use, temp_video)
+                                #    video_to_fix = current_filename
+                                #    json_to_use = json_path
+                                #    
+                                #    def background_reencode():
+                                #        try:
+                                #            temp_video = video_to_fix.replace(".mp4", "_temp.mp4")
+                                #            measured_fps = fix_video_timing(video_to_fix, json_to_use, temp_video)
                                             
                                             # Replace original with corrected version
-                                            os.remove(video_to_fix)
-                                            os.rename(temp_video, video_to_fix)
+                                #            os.remove(video_to_fix)
+                                #            os.rename(temp_video, video_to_fix)
                                             
                                             # Update JSON with measured FPS
-                                            with open(json_to_use, 'r') as f:
-                                                data = json.load(f)
-                                            data["measured_fps"] = measured_fps
-                                            with open(json_to_use, 'w') as f:
-                                                json.dump(data, f, indent=4)
+                                #            with open(json_to_use, 'r') as f:
+                                #                data = json.load(f)
+                                #            data["measured_fps"] = measured_fps
+                                #            with open(json_to_use, 'w') as f:
+                                #                json.dump(data, f, indent=4)
                                                 
-                                            print(f"[{camName}] Video re-encoded at {measured_fps:.2f} FPS", flush=True)
-                                        except Exception as e:
-                                            print(f"[{camName}] Warning: Could not fix timing: {e}", flush=True)
+                                #            print(f"[{camName}] Video re-encoded at {measured_fps:.2f} FPS", flush=True)
+                                #        except Exception as e:
+                                #            print(f"[{camName}] Warning: Could not fix timing: {e}", flush=True)
                                     
-                                    threading.Thread(target=background_reencode, daemon=True).start()
+                                #    threading.Thread(target=background_reencode, daemon=True).start()
 
                                 recording = False
                                 is_timing = False
@@ -390,6 +395,9 @@ if __name__ == "__main__":
     print(f"Output folder: {folder_path}")
     print("="*60)
         
+    # Store timeFPS for thread use
+    timeFPS = args.timeFPS
+    
     # Create threads
     t1 = threading.Thread(target = cameraBuffer, args = (0, frame_queue_A, stop_event_A, "cam_A"), daemon=True)
     t2 = threading.Thread(target = cameraBuffer, args = (1, frame_queue_B, stop_event_B, "cam_B"), daemon=True)
