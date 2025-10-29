@@ -47,6 +47,7 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName, target_interval):
 
         # Run continuously until stop event
         while not stop_event.is_set():
+            frame_start_time = time.time()
             try:
                 # Capture frame
                 frame = camera.capture_array()
@@ -397,10 +398,10 @@ if __name__ == "__main__":
         
     # Store timeFPS for thread use
     timeFPS = args.timeFPS
-    
+
     # Create threads
-    t1 = threading.Thread(target = cameraBuffer, args = (0, frame_queue_A, stop_event_A, "cam_A"), daemon=True)
-    t2 = threading.Thread(target = cameraBuffer, args = (1, frame_queue_B, stop_event_B, "cam_B"), daemon=True)
+    t1 = threading.Thread(target = cameraBuffer, args = (0, frame_queue_A, stop_event_A, "cam_A", timeFPS), daemon=True)
+    t2 = threading.Thread(target = cameraBuffer, args = (1, frame_queue_B, stop_event_B, "cam_B", timeFPS), daemon=True)
     t3 = threading.Thread(target = motionDetect, args = (frame_queue_A, stop_event_A, "cam_A", folder_path, log_file_path_A, args.delay), daemon=True)
     t4 = threading.Thread(target = motionDetect, args = (frame_queue_B, stop_event_B, "cam_B", folder_path, log_file_path_B, args.delay), daemon=True)
     
