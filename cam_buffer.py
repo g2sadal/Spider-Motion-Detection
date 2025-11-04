@@ -12,8 +12,8 @@ from queue import Queue, Empty
 from libcamera import controls
 
 # Thread-safe queues
-frame_queue_A = Queue(maxsize=500)
-frame_queue_B = Queue(maxsize=500)
+frame_queue_A = Queue(maxsize=200)
+frame_queue_B = Queue(maxsize=200)
 
 # Initialize cameras globally
 picam2_A = None
@@ -59,14 +59,14 @@ def cameraBuffer(camera_id, frame_queue, stop_event, camName, target_interval):
                 
                 # Put in queue (thread-safe)
                 try:
-                    frame_queue.put((frame.copy(), sensor_timestamp), timeout=1.0)
+                    frame_queue.put((frame, sensor_timestamp), timeout=5.0)
                     frame_count += 1
 
                     if frame_count % 50 == 0:
                         elapsed = time.time() - fps_start_time
                         current_fps = frame_count / elapsed if elapsed > 0 else 0
                         queue_usage = frame_queue.qsize()
-                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/500", flush=True)
+                        print(f"[{camName}] Captured {frame_count} frames | FPS: {current_fps:.2f} | Queue: {queue_usage}/200", flush=True)
                         
                         # Warn if queue is getting full
                         if queue_usage > 45:
@@ -220,32 +220,6 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
                                     timestamp_data["stop_time"] = stop_timestamp
                                     with open(json_path, "w", encoding="utf-8") as jf:
                                         json.dump(timestamp_data, jf, indent=4)
-                                    
-                                    # Re-encode in background (NON-BLOCKING)
-                                #    video_to_fix = current_filename
-                                #    json_to_use = json_path
-                                #    
-                                #    def background_reencode():
-                                #        try:
-                                #            temp_video = video_to_fix.replace(".mp4", "_temp.mp4")
-                                #            measured_fps = fix_video_timing(video_to_fix, json_to_use, temp_video)
-                                            
-                                            # Replace original with corrected version
-                                #            os.remove(video_to_fix)
-                                #            os.rename(temp_video, video_to_fix)
-                                            
-                                            # Update JSON with measured FPS
-                                #            with open(json_to_use, 'r') as f:
-                                #                data = json.load(f)
-                                #            data["measured_fps"] = measured_fps
-                                #            with open(json_to_use, 'w') as f:
-                                #                json.dump(data, f, indent=4)
-                                                
-                                #            print(f"[{camName}] Video re-encoded at {measured_fps:.2f} FPS", flush=True)
-                                #        except Exception as e:
-                                #            print(f"[{camName}] Warning: Could not fix timing: {e}", flush=True)
-                                    
-                                #    threading.Thread(target=background_reencode, daemon=True).start()
 
                                 recording = False
                                 is_timing = False
@@ -286,50 +260,6 @@ def motionDetect(frame_queue, stop_event, camName, folder_path, log_file_path, d
         print(f"[{camName}] Fatal error: {e}", flush=True)
         import traceback
         traceback.print_exc()    
-        
-def fix_video_timing(video_path, json_path, output_path):
-    """Re-encode video with correct frame timing based on timestamps"""
-    import json
-    
-    # Load timestamps
-    with open(json_path, 'r') as f:
-        metadata = json.load(f)
-    
-    frames_data = metadata['frames']
-    
-    # Calculate inter-frame intervals
-    timestamps = []
-    for frame_data in frames_data:
-        ts = dt.datetime.strptime(frame_data['timestamp'], "%Y-%m-%d %H:%M:%S.%f")
-        timestamps.append(ts)
-    
-    # Calculate average FPS from actual timestamps
-    if len(timestamps) > 1:
-        total_duration = (timestamps[-1] - timestamps[0]).total_seconds()
-        actual_fps = len(timestamps) / total_duration if total_duration > 0 else 1.0
-    else:
-        actual_fps = 1.0
-    
-    print(f"Re-encoding {video_path} at {actual_fps:.2f} FPS (measured from timestamps)")
-    
-    # Re-encode video
-    cap = cv2.VideoCapture(video_path)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, actual_fps, (width, height))
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        out.write(frame)
-    
-    cap.release()
-    out.release()
-    
-    return actual_fps
         
 if __name__ == "__main__":
     # Add argparse
